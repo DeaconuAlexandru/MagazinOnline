@@ -1,0 +1,164 @@
+-- Tabel contact_messages
+CREATE TABLE `contact_messages` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` text NOT NULL,
+  `phone` varchar(20) DEFAULT NULL,
+  `email` text NOT NULL,
+  `message` text NOT NULL,
+  `created_at` timestamp NULL DEFAULT current_timestamp(),
+  `status` varchar(50) DEFAULT 'În curs de livrare',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+
+-- Tabel users
+CREATE TABLE `users` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `email` varchar(255) NOT NULL,
+  `phone` varchar(20) DEFAULT NULL,
+  `username` text DEFAULT NULL,
+  `password` varchar(255) DEFAULT NULL,
+  `name` varchar(100) DEFAULT NULL,
+  `google_id` varchar(100) DEFAULT NULL,
+  `facebook_id` varchar(100) DEFAULT NULL,
+  `apple_id` varchar(100) DEFAULT NULL,
+  `created_at` timestamp DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+
+ALTER TABLE `users` ENGINE=InnoDB;
+
+-- Tabel utilizatori
+CREATE TABLE IF NOT EXISTS `users` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `email` VARCHAR(255) NOT NULL,
+  `phone` VARCHAR(20) DEFAULT NULL,
+  `username` VARCHAR(100) DEFAULT NULL,
+  `password` VARCHAR(255) DEFAULT NULL,
+  `name` VARCHAR(100) DEFAULT NULL,
+  `google_id` VARCHAR(100) DEFAULT NULL,
+  `facebook_id` VARCHAR(100) DEFAULT NULL,
+  `apple_id` VARCHAR(100) DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+
+-- Tabel produse
+CREATE TABLE IF NOT EXISTS `products` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(255) NOT NULL,
+  `price` DECIMAL(10,2) NOT NULL,
+  `img` VARCHAR(255) DEFAULT NULL,
+  `description` TEXT DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+
+-- Tabel comenzi
+CREATE TABLE IF NOT EXISTS `orders` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `user_id` INT(11) NOT NULL,
+  `total` DECIMAL(10,2) NOT NULL,
+  `shipping_method` VARCHAR(50) DEFAULT 'courier',
+  `payment_method` VARCHAR(50) DEFAULT 'online',
+  `status` VARCHAR(50) DEFAULT 'În curs de procesare',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  INDEX `user_id_idx` (`user_id`),
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+
+-- Tabel detalii comenzi (produse din comanda)
+CREATE TABLE IF NOT EXISTS `order_items` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `order_id` INT(11) NOT NULL,
+  `product_id` INT(11) NOT NULL,
+  `quantity` INT(11) NOT NULL,
+  `price` DECIMAL(10,2) NOT NULL,
+  PRIMARY KEY (`id`),
+  INDEX `order_id_idx` (`order_id`),
+  INDEX `product_id_idx` (`product_id`),
+  FOREIGN KEY (`order_id`) REFERENCES `orders`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (`product_id`) REFERENCES `products`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+
+CREATE TABLE IF NOT EXISTS user_addresses (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  type ENUM('billing','shipping') NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  phone VARCHAR(20),
+  county VARCHAR(100),
+  city VARCHAR(100),
+  address_line TEXT NOT NULL,
+  postal_code VARCHAR(20),
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_user_type (user_id, type),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+-- Tabel mesaje contact (opțional)
+CREATE TABLE IF NOT EXISTS `contact_messages` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(100) NOT NULL,
+  `phone` VARCHAR(20) DEFAULT NULL,
+  `email` VARCHAR(255) NOT NULL,
+  `message` TEXT NOT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `status` VARCHAR(50) DEFAULT 'În curs de livrare',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+CREATE TABLE easyboxes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  county VARCHAR(100) NOT NULL,
+  city VARCHAR(100) NOT NULL,
+  address TEXT NOT NULL,
+  lat DECIMAL(10,7) DEFAULT NULL,
+  lng DECIMAL(10,7) DEFAULT NULL,
+  active TINYINT(1) DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+ALTER TABLE orders
+ADD COLUMN easybox_id INT DEFAULT NULL,
+ADD CONSTRAINT fk_orders_easybox
+FOREIGN KEY (easybox_id) REFERENCES easyboxes(id)
+ON DELETE SET NULL
+ON UPDATE CASCADE;
+CREATE INDEX idx_easyboxes_city ON easyboxes(city);
+ALTER TABLE products
+ADD stock INT NOT NULL DEFAULT 0;
+UPDATE products
+SET stock = stock - 1
+WHERE id = 1 AND stock >= 1;
+CREATE TABLE feedback (
+    id INT(11) AUTO_INCREMENT PRIMARY KEY,
+    user_id INT(11) NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE feedback_images (
+    id INT(11) AUTO_INCREMENT PRIMARY KEY,
+    feedback_id INT(11) NOT NULL,
+    image_path VARCHAR(255) NOT NULL,
+    FOREIGN KEY (feedback_id) REFERENCES feedback(id) ON DELETE CASCADE
+);
+
+INSERT INTO products (name, price, img, description, stock) VALUES
+('Covor Persan Royal 1', 350.00, 'Image1.png', 'Un covor persan autentic lucrat manual cu motive tradiționale elaborate. Fiecare fir este țesut cu măiestrie de meșteri cu experiență.', 10),
+('Covor Persan Imperial 2', 350.00, 'Image2.png', 'Cel mai elaborat covor persan cu motive complexe persane.', 5),
+('Covor Modern Abstract 3', 350.00, 'Image3.png', 'Design contemporan cu motive abstracte vibrante.', 7),
+('Covor Artistic Premium 4', 520.00, 'Image4.png', 'O piesă de colecție cu design artistic unic.', 3),
+('Covor Oriental Clasic 5', 400.00, 'Image5.png', 'Eleganță orientală cu motive geometrice rafinate.', 6),
+('Covor Traditional Moldovenesc 6', 300.00, 'Image6.png', 'Inspirat din tradițiile moldovenești cu motive florale și geometrice.', 12);
+CREATE TABLE cards (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    card_number VARCHAR(20) NOT NULL,
+    expiry_month TINYINT NOT NULL,
+    expiry_year SMALLINT NOT NULL,
+    cvv VARCHAR(4) NOT NULL,
+    balance DECIMAL(10,2) NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+
