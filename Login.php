@@ -6,12 +6,13 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-// Conexiune la baza de date
-$host = 'sql112.infinityfree.com';
-$db   = 'if0_40665152_database';
-$user = 'if0_40665152';
-$pass = '7u72iuIGVg';
+// Conexiune DB
+$host = 'localhost';
+$db   = 'magazi15_ShergeiCovoare';
+$user = 'magazi15_Alex';
+$pass = 'lFG;;pevW4DJ?zKD';
 $charset = 'utf8mb4';
+
 
 $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
 $options = [
@@ -22,7 +23,7 @@ $options = [
 try {
     $pdo = new PDO($dsn, $user, $pass, $options);
 } catch (PDOException $e) {
-    exit('Conexiune DB eșuată: '.$e->getMessage());
+    exit('Conexiune DB esuata: '.$e->getMessage());
 }
 
 // Initializare feedback
@@ -45,23 +46,30 @@ if (isset($_POST['register'])) {
     $password = $_POST['password'] ?? '';
 
     if ($email === '' || $username === '' || $password === '') {
-        $registerFeedback = 'Completează toate câmpurile.';
+        $registerFeedback = 'Completeaza toate campurile.';
     } else {
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
+        // Verificam daca exista deja un user cu acest email
+        $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
         $stmt->execute([$email]);
         if ($stmt->fetch()) {
-            $registerFeedback = 'Emailul există deja.';
+            $registerFeedback = 'Deja te-ai inregistrat pe acest email, te rog sa te loghezi';
         } else {
-            $hash = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $pdo->prepare("INSERT INTO users (email, username, password, created_at) VALUES (?, ?, ?, NOW())");
-            $stmt->execute([$email, $username, $hash]);
-
-            $_SESSION['user_id'] = $pdo->lastInsertId();
-            $_SESSION['user_email'] = $email;
-            $_SESSION['user_username'] = $username;
-
-            header("Location: Acasa.php");
-            exit;
+            // Optional: verificam unicitatea username-ului
+            $stmt2 = $pdo->prepare("SELECT id FROM users WHERE username = ? LIMIT 1");
+            $stmt2->execute([$username]);
+            if ($stmt2->fetch()) {
+                $registerFeedback = 'Username-ul este folosit deja. Alege alt username.';
+            } else {
+                $hash = password_hash($password, PASSWORD_DEFAULT);
+                $stmt = $pdo->prepare("INSERT INTO users (email, username, password, created_at) VALUES (?, ?, ?, NOW())");
+                try {
+                    $stmt->execute([$email, $username, $hash]);
+                    // Nu face auto-login. Afiseaza instructiunea sa se logheze.
+                    $registerFeedback = 'Cont creat. Te rog sa te loghezi';
+                } catch (PDOException $e) {
+                    $registerFeedback = 'Eroare la creare cont. Incearca din nou.';
+                }
+            }
         }
     }
 }
@@ -72,9 +80,9 @@ if (isset($_POST['login'])) {
     $password = $_POST['password'] ?? '';
 
     if ($email === '' || $password === '') {
-        $loginFeedback = 'Completează toate câmpurile.';
+        $loginFeedback = 'Completeaza toate campurile.';
     } else {
-        $stmt = $pdo->prepare("SELECT id, username, password FROM users WHERE email=? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT id, username, password FROM users WHERE email = ? LIMIT 1");
         $stmt->execute([$email]);
         $user = $stmt->fetch();
 
@@ -86,7 +94,7 @@ if (isset($_POST['login'])) {
             header("Location: Acasa.php");
             exit;
         } else {
-            $loginFeedback = 'Email sau parola incorectă.';
+            $loginFeedback = 'Email sau parola incorecta.';
         }
     }
 }
@@ -98,7 +106,7 @@ if (isset($_POST['social_login'])) {
     $provider_id = $_POST['provider_id'] ?? '';
 
     if ($email === '' || $provider === '' || $provider_id === '') {
-        $socialFeedback = 'Completează toate câmpurile.';
+        $socialFeedback = 'Completeaza toate campurile.';
     } else {
         $map = ['google'=>'google_id','facebook'=>'facebook_id','apple'=>'apple_id'];
         if (!isset($map[$provider])) {
@@ -109,9 +117,9 @@ if (isset($_POST['social_login'])) {
             // Verificare dacă coloana există în tabel
             $columns = $pdo->query("SHOW COLUMNS FROM users")->fetchAll(PDO::FETCH_COLUMN);
             if (!in_array($col, $columns)) {
-                $socialFeedback = "Coloana $col nu există în baza de date.";
+                $socialFeedback = "Coloana $col nu exista in baza de date.";
             } else {
-                $stmt = $pdo->prepare("SELECT id, username FROM users WHERE $col=? LIMIT 1");
+                $stmt = $pdo->prepare("SELECT id, username FROM users WHERE $col = ? LIMIT 1");
                 $stmt->execute([$provider_id]);
                 $user = $stmt->fetch();
 
@@ -459,30 +467,25 @@ footer .footer-bottom a{color:#fff;text-decoration:none;margin:0 8px;}
 <div class="container">
 
 <?php
+// Daca utilizatorul nu este autentificat afisam formularele
 if (!isset($_SESSION['user_id'])) {
-
-    $stmt = $pdo->query("SELECT COUNT(*) FROM users");
-    $userCount = (int)$stmt->fetchColumn();
-    $showRegister = ($userCount === 0);
 ?>
 
-    <?php if ($showRegister): ?>
-        <h2>Inregistreaza-te</h2>
-        <form method="post">
-            <input type="email" name="email" required placeholder="Introdu adresa de email">
-            <input type="text" name="username" required placeholder="Alege un username">
-            <input type="password" name="password" required placeholder="Alege o parola">
-            <button type="submit" name="register">Creeaza cont</button>
-        </form>
+    <h2>Inregistreaza-te</h2>
+    <form method="post" autocomplete="off" novalidate>
+        <input type="email" name="email" required placeholder="Introdu adresa de email" value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>">
+        <input type="text" name="username" required placeholder="Alege un username" value="<?php echo isset($_POST['username']) ? htmlspecialchars($_POST['username']) : ''; ?>">
+        <input type="password" name="password" required placeholder="Alege o parola">
+        <button type="submit" name="register">Creeaza cont</button>
+    </form>
 
-        <?php if (!empty($registerFeedback)): ?>
-            <p class="feedback"><?php echo htmlspecialchars($registerFeedback); ?></p>
-        <?php endif; ?>
+    <?php if (!empty($registerFeedback)): ?>
+        <p class="feedback"><?php echo htmlspecialchars($registerFeedback); ?></p>
     <?php endif; ?>
 
     <h2>Autentificare</h2>
-    <form method="post">
-        <input type="email" name="email" required placeholder="Email">
+    <form method="post" autocomplete="off" novalidate>
+        <input type="email" name="email" required placeholder="Email" value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>">
         <input type="password" name="password" required placeholder="Parola">
         <button type="submit" name="login">Login</button>
     </form>
@@ -498,9 +501,20 @@ if (!isset($_SESSION['user_id'])) {
         <a href="#" class="social-btn facebook">Facebook</a>
         <a href="#" class="social-btn apple">Apple</a>
     </div>
+
+<?php } else {
+    // Utilizator autentificat, afisam scurt rezumat si link de logout
+    $displayName = htmlspecialchars($_SESSION['user_username'] ?? $_SESSION['user_email']);
+?>
+    <div style="max-width:820px;margin:40px auto;padding:28px;background:#fff;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.08);text-align:center;">
+        <h2>Bine ai revenit</h2>
+        <p>Ești autentificat ca <?php echo $displayName; ?>.</p>
+        <p><a class="btn-primary" href="Acasa.php">Pagina principală</a> <a class="btn-primary" href="Login.php?logout=1">Deconectare</a></p>
+    </div>
 <?php } ?>
 
 </div>
+
 <footer id="footer">
   <div class="footer-container">
 
