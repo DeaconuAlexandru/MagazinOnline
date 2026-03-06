@@ -161,7 +161,7 @@ header nav { flex: 1; display: flex; justify-content: center; gap: 15px; flex-wr
 <header id="header">
   <div style="display:flex;align-items:center;justify-content:space-between;width:100%;flex-wrap:wrap;">
     <div style="display:flex;align-items:center;gap:15px;">
-      <img src="Image3.png" alt="Logo" style="height:50px;">
+      <img src="Image41.png" alt="Logo" style="height:50px;">
     </div>
 
     <nav id="mainNav" style="display:flex;gap:15px;flex-wrap:wrap;justify-content:center;flex:1;">
@@ -233,7 +233,7 @@ header nav { flex: 1; display: flex; justify-content: center; gap: 15px; flex-wr
   <div class="footer-container">
     <div class="footer-col">
       <div class="footer-logo">
-        <img src="Image3.png" alt="Sherghei Covoare">
+        <img src="Image41.png" alt="Sherghei Covoare">
       </div>
       <p>Primul an prin care aducem covoare traditionale si moderne in casa ta.</p>
       <div class="footer-social">
