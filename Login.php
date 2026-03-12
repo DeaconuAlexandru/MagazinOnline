@@ -22,6 +22,10 @@ $GOOGLE_CLIENT_ID     = getenv('GOOGLE_CLIENT_ID') ?: '1054381847952-l0fasrivsvg
 $GOOGLE_CLIENT_SECRET = getenv('GOOGLE_CLIENT_SECRET') ?: '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';
 $GOOGLE_REDIRECT_URI = getenv('GOOGLE_REDIRECT_URI') ?: 'https://magazinpsy.ro/Login.php?action=google_callback';
 
+// FACEBOOK CONFIG (folosește getenv() în producție)
+$FACEBOOK_APP_ID     = getenv('FACEBOOK_APP_ID')     ?: 'a583f7397577c9664e4ac0c8675ccd18';
+$FACEBOOK_APP_SECRET = getenv('FACEBOOK_APP_SECRET') ?: '858d476b823ef1e1b24707fa835e1a3e';
+$FACEBOOK_REDIRECT_URI = getenv('FACEBOOK_REDIRECT_URI') ?: 'https://magazinpsy.ro/Acasa.php?action=facebook_callback';
 // DB config
 $dbHost = getenv('DB_HOST') ?: 'localhost';
 $dbName = getenv('DB_NAME') ?: 'magazi15_ShergeiCovoare';
@@ -182,7 +186,112 @@ if (isset($_GET['action']) && $_GET['action'] === 'google_callback') {
 
     safe_redirect('Acasa.php');
 }
+// ==== Facebook OAuth (GET actions) ====
+if (isset($_GET['action']) && $_GET['action'] === 'facebook') {
+    $state = bin2hex(random_bytes(12));
+    $_SESSION['oauth_state'] = $state;
+    $params = http_build_query([
+        'client_id'    => $FACEBOOK_APP_ID,
+        'redirect_uri' => $FACEBOOK_REDIRECT_URI,
+        'state'        => $state,
+        'scope'        => 'email,public_profile',
+        'response_type'=> 'code',
+    ]);
+    safe_redirect('https://www.facebook.com/v16.0/dialog/oauth?' . $params);
+}
 
+if (isset($_GET['action']) && $_GET['action'] === 'facebook_callback') {
+    if (empty($_GET['code']) || empty($_GET['state']) || empty($_SESSION['oauth_state']) || !hash_equals($_SESSION['oauth_state'], (string)$_GET['state'])) {
+        exit('State invalid sau code lipsa.');
+    }
+    $code = (string)$_GET['code'];
+
+    // Exchange code for access_token
+    $tokenEndpoint = 'https://graph.facebook.com/v16.0/oauth/access_token';
+    $qs = http_build_query([
+        'client_id'     => $FACEBOOK_APP_ID,
+        'redirect_uri'  => $FACEBOOK_REDIRECT_URI,
+        'client_secret' => $FACEBOOK_APP_SECRET,
+        'code'          => $code,
+    ]);
+    $ch = curl_init($tokenEndpoint . '?' . $qs);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $res = curl_exec($ch);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+    if ($res === false) exit('Eroare la comunicarea cu Facebook: ' . $curlErr);
+    $data = json_decode($res, true);
+    if (empty($data['access_token'])) exit('Nu am primit access_token de la Facebook.');
+
+    $accessToken = $data['access_token'];
+
+    // Get user info
+    $ch = curl_init('https://graph.facebook.com/me?fields=id,name,email&access_token=' . urlencode($accessToken));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $userJson = curl_exec($ch);
+    curl_close($ch);
+    $fuser = json_decode($userJson, true);
+
+    $email = $fuser['email'] ?? '';
+    $facebookId = $fuser['id'] ?? '';
+    $name = $fuser['name'] ?? $email;
+
+    // email poate lipsi la unele conturi FB — gestionează cazul
+    if (!$facebookId) exit('Date incomplete de la Facebook.');
+
+    // Asigură-te că ai coloana facebook_id în tabela users (vezi secțiunea SQL mai jos)
+    $col = 'facebook_id';
+    $hasFacebookId = column_exists($pdo, 'users', $col);
+
+    $user = false;
+    if ($hasFacebookId) {
+        $stmt = $pdo->prepare("SELECT id, username FROM users WHERE facebook_id = ? LIMIT 1");
+        $stmt->execute([$facebookId]);
+        $user = $stmt->fetch();
+    }
+
+    if (!$user) {
+        // dacă exista user cu același email, leagă providerul
+        if ($email) {
+            $stmt = $pdo->prepare("SELECT id, username FROM users WHERE email = ? LIMIT 1");
+            $stmt->execute([$email]);
+            $exist = $stmt->fetch();
+        } else {
+            $exist = false;
+        }
+
+        if ($exist) {
+            $userId = (int)$exist['id'];
+            $username = $exist['username'] ?? $email;
+            if ($hasFacebookId) {
+                $upd = $pdo->prepare("UPDATE users SET facebook_id = ? WHERE id = ?");
+                $upd->execute([$facebookId, $userId]);
+            }
+        } else {
+            // creare cont nou (daca nu exista coloana, trimiti NULL/nu atribui)
+            if ($hasFacebookId) {
+                $ins = $pdo->prepare("INSERT INTO users (email, username, facebook_id, created_at) VALUES (?, ?, ?, NOW())");
+                $ins->execute([$email, $name, $facebookId]);
+            } else {
+                $ins = $pdo->prepare("INSERT INTO users (email, username, created_at) VALUES (?, ?, NOW())");
+                $ins->execute([$email, $name]);
+            }
+            $userId = (int)$pdo->lastInsertId();
+            $username = $name;
+        }
+    } else {
+        $userId = (int)$user['id'];
+        $username = $user['username'] ?? $email;
+    }
+
+    // login
+    session_regenerate_id(true);
+    $_SESSION['user_id'] = $userId;
+    $_SESSION['user_email'] = $email;
+    $_SESSION['user_username'] = $username;
+
+    safe_redirect('Acasa.php');
+}
 // ===== LOGOUT via GET? =====
 if (isset($_GET['logout'])) {
     session_unset();
@@ -762,7 +871,7 @@ footer .footer-bottom a{color:#fff;text-decoration:none;margin:0 8px;}
       <div class="footer-logo">
         <img src="Image3.png" alt="Sherghei Covoare">
       </div>
-      <p>De peste 20 de ani aduci covoare traditionale si moderne in casa ta.</p>
+      <p>Primul an prin care aducem covoare traditionale si moderne in casa ta.</p>
 
       <div class="footer-social">
         <a href="https://www.facebook.com/maestro.fortunato/" target="_blank" title="Facebook">
@@ -795,9 +904,7 @@ footer .footer-bottom a{color:#fff;text-decoration:none;margin:0 8px;}
     <div class="footer-col">
       <strong>Servicii</strong>
       <ul>
-        <li><a href="#">Vanzare covoare</a></li>
-        <li><a href="#">Curatare profesionala</a></li>
-        <li><a href="#">Restaurare covoare</a></li>
+        <li><a href="#">Vanzare produse psygeometry</a></li>
         <li><a href="#">Consultanta gratuita</a></li>
         <li><a href="#">Livrare la domiciliu</a></li>
       </ul>
@@ -805,9 +912,9 @@ footer .footer-bottom a{color:#fff;text-decoration:none;margin:0 8px;}
 
     <div class="footer-col">
       <strong>Contact</strong>
-      <p>Adresa, Str. Covoarelor Nr. 12, Bucuresti</p>
-      <p>Telefon, +40 123 456 789</p>
-      <p>Email, contact@sherghei-covoare.ro</p>
+      <p>Adresa, Craiova,Dolj</p>
+      <p>Telefon, 0764.049.235</p>
+      <p>Email, office@magazinpsy.ro</p>
       <p>Program, Luni Sambata 9 18</p>
     </div>
 
