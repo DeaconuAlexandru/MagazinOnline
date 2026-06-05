@@ -2,69 +2,68 @@
 declare(strict_types=1);
 
 session_start();
-$allowedEmails = [
-    'deaconunicolaealexandru@gmail.com',
-    'office@magazinpsy.ro',
-    'biz.craiova@gmail.com'
-];
 
+$allowedEmails = ['office@magazinpsy.ro'];
 $currentEmail = strtolower(trim((string)(
-    $_SESSION['user_email']
-    ?? $_SESSION['email']
-    ?? $_SESSION['gmail']
-    ?? ''
+    $_SESSION['user_email'] ?? $_SESSION['email'] ?? $_SESSION['gmail'] ?? ''
 )));
-
 $isStockEditor = in_array($currentEmail, $allowedEmails, true);
-// --- Debug temporar (elimina in productie) ---
+
 ini_set('display_errors', '1');
 error_reporting(E_ALL);
 
-// Config DB
-$host    = 'localhost';
-$dbname  = 'magazi15_ShergeiCovoare';
-$user    = 'magazi15_Alex';
-$pass    = 'lFG;;pevW4DJ?zKD';
+$host = 'localhost';
+$dbname = 'magazi15_ShergeiCovoare';
+$user = 'magazi15_Alex';
+$pass = 'lFG;;pevW4DJ?zKD';
 $charset = 'utf8mb4';
 
-$pdoOptions = [
-    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-];
-
-// Conexiune DB
 try {
-    $dsn = "mysql:host={$host};dbname={$dbname};charset={$charset}";
-    $pdo = new PDO($dsn, $user, $pass, $pdoOptions);
+    $pdo = new PDO(
+        "mysql:host={$host};dbname={$dbname};charset={$charset}",
+        $user,
+        $pass,
+        [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]
+    );
 } catch (PDOException $e) {
-    // Afiseaza eroarea pentru debugging; in productie logheaza si arata un mesaj generos
     die("Eroare DB: " . $e->getMessage());
 }
+require_once __DIR__ . '/social_tracker.php';
+recordSocialVisit($pdo);
+function e(?string $s): string
+{
+    return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+}
 
-// Functii utilitare (pastreaza-le neschimbate)
 function formatCm($v): ?string
 {
-    if ($v === null || $v === '') return null;
+    if ($v === null || $v === '') {
+        return null;
+    }
+
     $v = floatval(str_replace(',', '.', (string)$v));
-    $s = number_format($v, 2, ',', '');
-    $s = rtrim($s, '0');
-    $s = rtrim($s, ',');
+    $s = rtrim(rtrim(number_format($v, 2, ',', ''), '0'), ',');
+
     return $s . ' cm';
 }
+
 function parseDimensionsString(?string $s): ?array
 {
-    if ($s === null || trim($s) === '') return null;
-    $s = trim($s);
-    $s = str_replace(['×', 'X', '*'], 'x', $s);
+    if ($s === null || trim($s) === '') {
+        return null;
+    }
+
+    $s = str_replace(['×', 'X', '*'], 'x', trim($s));
     $s = preg_replace('/\s*x\s*/i', 'x', $s);
     $s = str_replace(',', '.', $s);
 
     if (preg_match('/^([\d\.]+)x([\d\.]+)$/i', $s, $m)) {
         return [(float)$m[1], (float)$m[2]];
     }
-    if (preg_match('/^([\d\.]+)m?x([\d\.]+)m?$/i', $s, $m)) {
-        return [(float)$m[1], (float)$m[2]];
-    }
+
     return null;
 }
 
@@ -75,184 +74,208 @@ function formatPrice($price): string
 
 function truncateText(string $text, int $maxLen): string
 {
-    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
-        if (mb_strlen($text) <= $maxLen) return $text;
-        return mb_substr($text, 0, $maxLen - 3) . '...';
-    } else {
-        if (strlen($text) <= $maxLen) return $text;
-        return substr($text, 0, $maxLen - 3) . '...';
+    if (function_exists('mb_strlen') && mb_strlen($text) <= $maxLen) {
+        return $text;
     }
+
+    if (strlen($text) <= $maxLen) {
+        return $text;
+    }
+
+    return (function_exists('mb_substr')
+        ? mb_substr($text, 0, $maxLen - 3)
+        : substr($text, 0, $maxLen - 3)
+    ) . '...';
 }
 
-/**
- * Rezolvarea imaginii - aceeasi logica ca in Colectie.php
- */
-function resolveImageSameAsCollection(?string $imgFromDb): string
+function resolveImage(?string $imgFromDb): string
 {
     $imgFromDb = trim((string)($imgFromDb ?? ''));
-    $resolved = '';
 
-    if ($imgFromDb !== '') {
-
-        // 1. daca calea stocata este un fisier valid, foloseste basename-ul ei
-        if (is_file($imgFromDb)) {
-            $resolved = basename($imgFromDb);
-        } else {
-            // 2. incearca __DIR__ + calea stocata
-            $candidate = __DIR__ . '/' . ltrim($imgFromDb, '/');
-            if (is_file($candidate)) {
-                $resolved = basename($candidate);
-            } else {
-                // 3. incearca doar basename din DB in directorul curent
-                $candidate2 = __DIR__ . '/' . basename($imgFromDb);
-                if (is_file($candidate2)) {
-                    $resolved = basename($candidate2);
-                }
-            }
-        }
+    if ($imgFromDb === '') {
+        return 'default.png';
     }
 
-    return ($resolved !== '') ? $resolved : 'default.png';
+    if (is_file($imgFromDb)) {
+        return basename($imgFromDb);
+    }
+
+    $c1 = __DIR__ . '/' . ltrim($imgFromDb, '/');
+    if (is_file($c1)) {
+        return basename($c1);
+    }
+
+    $c2 = __DIR__ . '/' . basename($imgFromDb);
+    if (is_file($c2)) {
+        return basename($c2);
+    }
+
+    return 'default.png';
 }
 
-// --- Validare si preluare item id ---
 $itemId = filter_input(INPUT_GET, 'item', FILTER_VALIDATE_INT);
-if ($itemId === false || $itemId === null) {
-    die("<h2 style='text-align:center;margin-top:40px;'>Produsul nu a fost gasit.</h2>");
+
+if (!$itemId) {
+    die("<h2 style='text-align:center;margin-top:40px;'>Produsul nu a fost găsit.</h2>");
 }
 
-// Preluare produs din DB
 $stmt = $pdo->prepare("SELECT * FROM products WHERE id = :id");
 $stmt->execute(['id' => $itemId]);
 $item = $stmt->fetch();
 
 if (!$item) {
-    die("<h2 style='text-align:center;margin-top:40px;'>Produsul nu a fost gasit.</h2>");
+    die("<h2 style='text-align:center;margin-top:40px;'>Produsul nu a fost găsit.</h2>");
 }
 
-// ACUM folosim $item in siguranta
-// folosește funcţia pentru produsul curent (in loc de functia inexistenta)
-$imageForOutput = resolveImageSameAsCollection($item['img'] ?? null);
+$itemName = trim((string)($item['name'] ?? ''));
+$itemCategory = trim((string)($item['category'] ?? ''));
 
-// cache-buster: aceeasi cale ca in Colectie (nu prefixa cu images/ decat daca ai fisiere in subfolder)
+$isIngerasiCategory = (strcasecmp($itemCategory, 'Ingerasi') === 0);
+$isIngeras1 = (strcasecmp($itemName, 'Ingeras 1') === 0);
+
+$imageForOutput = resolveImage($item['img'] ?? null);
 $cacheBuster = '';
 $fsPath = __DIR__ . '/' . $imageForOutput;
+
 if (is_file($fsPath)) {
     $cacheBuster = '?v=' . filemtime($fsPath);
 }
 
-// Componente (camp DB sau text implicit)
-$componentsRaw = $item['componente'] ?? $item['components'] ?? $item['component'] ?? null;
-
-// extragem basename + numar din numele imaginii, aceeasi regula ca in Colectie.php
-$imgBasename = '';
+$imgBasename = strtolower(basename((string)($item['img'] ?? '')));
 $imgNum = null;
-if (!empty($item['img'])) {
-    $imgBasename = strtolower(basename((string)$item['img']));
-    if (preg_match('/(\d+)(?=\.[a-z]+$)/i', $imgBasename, $m)) {
-        $imgNum = (int)$m[1];
+
+if (preg_match('/(\d+)(?=\.[a-z]+$)/i', $imgBasename, $m)) {
+    $imgNum = (int)$m[1];
+}
+
+$materialRaw = $item['material'] ?? $item['componente'] ?? $item['components'] ?? null;
+
+if ($materialRaw === null || trim((string)$materialRaw) === '') {
+    $materialText = 'Mocheta printata prin sublimare, spate cauciuc antiderapant';
+
+    if ($imgNum !== null) {
+        if ($imgNum >= 61 && $imgNum <= 67) {
+            $materialText = 'Ingerașii sunt făcuți din ipsos';
+        } elseif ($imgNum >= 71 && $imgNum <= 80) {
+            $materialText = 'Mandala alcătuită din mocheta și spate antiderapant';
+        } elseif ($imgNum >= 81 && $imgNum <= 126) {
+            $materialText = 'Tablourile sunt realizate pe foaie A3, echivalent a două coli A4';
+        } elseif ($imgNum >= 131 && $imgNum <= 148) {
+            $materialText = 'Mocheta rotundă, imprimată, spate cauciuc antiderapant';
+        } elseif ($imgNum >= 151 && $imgNum <= 160) {
+            $materialText = 'Ingerașii, modelați din ipsos cu grijă și finețe, se unesc cu mandala, alcătuită din mocheta și spate antiderapant, într-o creație armonioasă ce îmbină delicatețea cu stabilitatea, spiritul cu forma și frumusețea cu funcționalitatea.';
+        }
     }
-}
-
-// setare text implicit
-$componentsText = ($componentsRaw === null || trim((string)$componentsRaw) === '')
-    ? 'Mocheta printata prin sublimare, spate cauciuc antiderapant'
-    : trim((string)$componentsRaw);
-
-// cazuri speciale pe baza numarului din imagine
-if ($imgNum !== null) {
-    if ($imgNum >= 61 && $imgNum <= 67) {
-        $componentsText = 'Ingerasii sunt facuti cu materialul ipsos';
-    } elseif ($imgNum >= 71 && $imgNum <= 80) {
-        $componentsText = 'Mandala alcatuita din mocheta si spate antiderapant';
-    } elseif ($imgNum >= 81 && $imgNum <= 126) {
-        $componentsText = 'Tablourile sunt realizate pe foaie A3, echivalent a doua coli A4, conform standardului ISO 216';
-    } elseif ($imgNum >= 131 && $imgNum <= 148) {
-        $componentsText = 'Mocheta rotunda, imprimata, spate cauciuc antiderapant';
-    }
-}
-
-$componentsText = truncateText($componentsText, 300);
-
-// Suport dimensiuni, păstrează funcțiile helper existente
-$dimensionsText = 'Nu specificat';
-$length = null;
-$width  = null;
-$diameter = null;
-
-// detectăm dacă produsul este covor rotund
-$isRound = false;
-if (!empty($item['name']) && stripos($item['name'], 'covor rotund') !== false) {
-    $isRound = true;
-} elseif (isset($imgNum) && is_int($imgNum) && $imgNum >= 131 && $imgNum <= 143) {
-    $isRound = true;
-} elseif (!empty($item['type']) && stripos($item['type'], 'rotund') !== false) {
-    $isRound = true;
-}
-
-// dacă e rotund și are diameter_m, afișăm diametrul
-if ($isRound && array_key_exists('diameter_cm', $item) && $item['diameter_cm'] !== null && $item['diameter_cm'] !== '') {
-    $dimensionsText = 'Diametru ' . formatCm($item['diameter_cm']);
 } else {
-    if (array_key_exists('lungime_cm', $item)) $length = $item['lungime_cm'];
-    if (array_key_exists('latime_cm',  $item)) $width  = $item['latime_cm'];
-    if ($length === null && array_key_exists('length', $item)) $length = $item['length'];
-    if ($width  === null && array_key_exists('width',  $item)) $width  = $item['width'];
+    $materialText = truncateText(trim((string)$materialRaw), 300);
+}
 
-    if ($length === null || $width === null) {
-        $raw = $item['dimensiuni'] ?? $item['size'] ?? $item['dimensions'] ?? null;
-        $parsed = parseDimensionsString($raw);
-        if ($parsed && count($parsed) === 2) {
-            if ($length === null) $length = $parsed[0];
-            if ($width  === null) $width  = $parsed[1];
-        }
+$dimensionsText = 'Nu specificat';
+$isRound = false;
+$isCombined = (strcasecmp($itemCategory, 'Ingeras si Mandala') === 0);
+
+if ($isCombined) {
+    $length = $item['lungime_cm'] ?? $item['length'] ?? null;
+    $width  = $item['latime_cm'] ?? $item['width'] ?? null;
+    $diameter = $item['diameter_cm'] ?? null;
+
+    $parts = [];
+
+    if ($length !== null && $length !== '' && $width !== null && $width !== '') {
+        $parts[] = formatCm($length) . ' lungime';
+        $parts[] = formatCm($width) . ' lățime';
     }
 
-    if ($length !== null && $length !== '') {
-        if ($width !== null && $width !== '') {
-            $dimensionsText = formatCm($length) . ' lungime, ' . formatCm($width) . ' latime';
-        } else {
-            $dimensionsText = formatCm($length) . ' lungime';
-        }
+    if ($diameter !== null && (float)$diameter > 0) {
+        $parts[] = 'Diametru ' . formatCm($diameter);
     } else {
-        if ($width !== null && $width !== '') {
-            $dimensionsText = formatCm($width) . ' latime';
+        $parts[] = 'Diametru ' . formatCm(6);
+    }
+
+    $dimensionsText = implode(', ', $parts);
+} else {
+    if (!empty($itemCategory) && strcasecmp($itemCategory, 'Mandala') === 0) {
+        $isRound = true;
+    } elseif (!empty($item['name']) && stripos($item['name'], 'covor rotund') !== false) {
+        $isRound = true;
+    } elseif ($imgNum !== null && $imgNum >= 131 && $imgNum <= 143) {
+        $isRound = true;
+    }
+
+    if ($isRound && !empty($item['diameter_cm']) && (float)$item['diameter_cm'] > 0) {
+        $dimensionsText = 'Diametru ' . formatCm($item['diameter_cm']);
+    } else {
+        $length = $item['lungime_cm'] ?? $item['length'] ?? null;
+        $width = $item['latime_cm'] ?? $item['width'] ?? null;
+
+        if ($length === null || $width === null) {
+            $parsed = parseDimensionsString($item['dimensiuni'] ?? $item['size'] ?? null);
+
+            if ($parsed) {
+                $length = $length ?? $parsed[0];
+                $width = $width ?? $parsed[1];
+            }
+        }
+
+        if ($length !== null && $length !== '' && $width !== null && $width !== '') {
+            $dimensionsText = formatCm($length) . ' lungime, ' . formatCm($width) . ' lățime';
+        } elseif ($length !== null && $length !== '') {
+            $dimensionsText = formatCm($length) . ' lungime';
+        } elseif ($width !== null && $width !== '') {
+            $dimensionsText = formatCm($width) . ' lățime';
         }
     }
 }
+
+$priceVal = $item['price'] ?? null;
+$stockVal = (int)($item['stock'] ?? 0);
+$isOutOfStock = ($stockVal <= 0);
+$isCerere = $isOutOfStock || ($priceVal === null || $priceVal === '' || (float)$priceVal <= 0);
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_stock'])) {
     if (!$isStockEditor) {
         die('Acces interzis.');
     }
 
-    $newStock = isset($_POST['stock_value']) && $_POST['stock_value'] === '1' ? 1 : 0;
+    $newStock = (isset($_POST['stock_value']) && $_POST['stock_value'] === '1') ? 1 : 0;
 
-    $upd = $pdo->prepare("UPDATE products SET stock = :stock WHERE id = :id");
-    $upd->execute([
+    $pdo->prepare("UPDATE products SET stock = :stock WHERE id = :id")->execute([
         'stock' => $newStock,
-        'id'    => $itemId
+        'id'    => $itemId,
     ]);
 
     header("Location: " . $_SERVER['PHP_SELF'] . "?item=" . $itemId);
     exit;
 }
-// Tratare adaugare in cos
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_to_cart'])) {
-    if (!isset($item['stock']) || (int)$item['stock'] <= 0) {
-        $_SESSION['flash_message'] = 'Acest produs nu este disponibil pe stoc';
-        header('Location: Acasa.php');
+    if ($isOutOfStock) {
+        $_SESSION['flash_message'] = 'Acest produs este disponibil la cerere';
+        header('Location: Contact.php?produs=' . urlencode((string)($item['name'] ?? '')));
         exit;
     }
 
     $qty = filter_input(INPUT_POST, 'qty', FILTER_VALIDATE_INT);
-    if ($qty === false || $qty === null || $qty < 1) $qty = 1;
+    if (!$qty || $qty < 1) {
+        $qty = 1;
+    }
+
+    $availableStock = (int)$item['stock'];
+    if ($qty > $availableStock) {
+        $qty = $availableStock;
+    }
 
     $cartItem = [
-        'id'    => $item['id'],
-        'name'  => $item['name'] ?? '',
-        'price' => $item['price'] ?? 0,
-        'qty'   => $qty,
-        'img'   => !empty($item['img'] ?? null) ? $item['img'] : 'default.png',
+        'id'          => $item['id'],
+        'name'        => $item['name'] ?? '',
+        'price'       => $item['price'] ?? 0,
+        'qty'         => $qty,
+        'img'         => !empty($item['img']) ? $item['img'] : 'default.png',
+        'category'    => $item['category'] ?? '',
+        'description' => $item['description'] ?? '',
+        'material'    => $item['material'] ?? $item['componente'] ?? $item['components'] ?? '',
+        'dimensiuni'  => $item['dimensiuni'] ?? $item['size'] ?? '',
+        'stock'       => (int)($item['stock'] ?? 0),
     ];
 
     if (!isset($_SESSION['cart']) || !is_array($_SESSION['cart'])) {
@@ -260,6 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_to_cart'])) {
     }
 
     $productKey = (string)$item['id'];
+
     if (isset($_SESSION['cart'][$productKey])) {
         $_SESSION['cart'][$productKey]['qty'] += $qty;
     } else {
@@ -269,606 +293,787 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_to_cart'])) {
     header('Location: CosulMeu.php');
     exit;
 }
+
+$contactOfertaUrl = 'Contact.php?produs=' . urlencode((string)($item['name'] ?? ''));
+$pageTitle = trim((string)($item['name'] ?? 'Produs')) . ' - Detalii';
 ?>
 <!DOCTYPE html>
 <html lang="ro">
 <head>
 <meta charset="UTF-8">
-<title><?= $item['name'] ?> - Detalii</title>
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= e($pageTitle) ?></title>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-body{
-    margin:0;
-    font-family:'Roboto',sans-serif;
-    background:#fdf6f0;
-    color:#222;
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
 }
-/* Header */
+
+html, body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+}
+
+body {
+    margin: 0;
+    font-family: 'Roboto', sans-serif;
+    background: #fdf6f0;
+    color: #222;
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+}
+
+img {
+    max-width: 100%;
+    display: block;
+}
+
+a {
+    color: inherit;
+}
+
+body.dark-mode {
+    background: #111;
+    color: #fdf6f0;
+}
+
 header {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
     background: #8C92AC;
     color: #fff;
-    padding: 15px;
-    position: sticky; /* sau fixed dacă vrei să rămână mereu vizibil */
-    top: 0;
-    width: 100%;
-    z-index: 1000; /* asigură că stă deasupra altor elemente */
+    padding: 14px 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
 }
 
-header h1 {
-    margin: 0;
-    font-size: 28px;
-    display: inline-block;
+header .logo {
+    display: flex;
+    align-items: center;
 }
 
-header nav {
-    display: inline-block;
-    margin-left: 20px;
+header .logo img {
+    height: 50px;
+    width: auto;
 }
 
-header nav a {
-    margin: 0 10px;
+#mainNav {
+    flex: 1 1 auto;
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+#mainNav a {
     text-decoration: none;
-    color: #fff;
-    padding: 8px 15px;
+    padding: 10px 16px;
+    background: #fff;
+    color: #b5651d;
     border-radius: 8px;
+    font-weight: 600;
+    transition: 0.25s;
+    white-space: nowrap;
 }
 
-header nav a.active {
+#mainNav a:hover,
+#mainNav a.active {
+    background: #8b4315;
+    color: #fff;
+    transform: translateY(-2px);
+}
+
+.menu-toggle {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    cursor: pointer;
+    margin-left: auto;
+}
+
+.menu-toggle div {
+    width: 28px;
+    height: 3px;
+    background: #fff;
+    border-radius: 2px;
+}
+
+.page-wrapper {
+    max-width: 1200px;
+    margin: 32px auto 40px;
+    padding: 0 20px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 1.15fr);
+    gap: 28px;
+    align-items: start;
+}
+
+.product-image {
+    position: sticky;
+    top: 92px;
+    align-self: start;
+}
+
+.product-image-box {
+    background: #fff;
+    border-radius: 18px;
+    padding: 14px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.10);
+    border: 1px solid rgba(181, 101, 29, 0.08);
+}
+
+.product-image-box img {
+    width: 100%;
+    border-radius: 14px;
+    object-fit: cover;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+
+.product-info {
+    background: #fff;
+    padding: 28px;
+    border-radius: 18px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.10);
+    border: 1px solid rgba(181, 101, 29, 0.08);
+}
+
+.product-info h1 {
+    margin: 0;
+    font-size: clamp(24px, 3vw, 34px);
+    font-family: 'Montserrat', sans-serif;
+    line-height: 1.2;
+}
+
+.price-box {
+    margin: 16px 0 10px;
+}
+
+.price-new {
+    font-size: clamp(24px, 4vw, 30px);
+    font-weight: 800;
+    color: #b5651d;
+}
+
+.price-cerere {
+    font-size: 18px;
+    font-weight: 800;
+    color: #8b4315;
+    background: #fdf0e6;
+    padding: 10px 14px;
+    border-radius: 12px;
+    display: inline-block;
+}
+
+.short-desc {
+    margin: 12px 0 0;
+    line-height: 1.7;
+    color: #333;
+}
+
+.section-title {
+    margin: 24px 0 12px;
+    font-family: 'Montserrat', sans-serif;
+    font-size: 18px;
+}
+
+.info-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.info-card {
+    background: #f9f3ee;
+    padding: 15px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(0,0,0,0.06);
+}
+
+.info-card.full {
+    grid-column: 1 / -1;
+}
+
+.info-card h4 {
+    margin: 0 0 6px;
+    color: #b5651d;
+    font-size: 16px;
+}
+
+.info-card p {
+    margin: 0;
+    font-weight: 500;
+    line-height: 1.6;
+}
+
+.action-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.action-card {
+    background: #b5651d;
+    color: #fff;
+    text-align: center;
+    padding: 16px 14px;
+    border-radius: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.25s;
+    text-decoration: none;
+    display: block;
+    border: none;
+}
+
+.action-card:hover {
+    background: #8b4315;
+    transform: translateY(-2px);
+}
+
+.action-card.secondary {
+    background: #1d4ed8;
+}
+
+.action-card.secondary:hover {
+    background: #1e40af;
+}
+
+.btn-solicita-oferta {
+    display: block;
+    margin-top: 16px;
+    padding: 16px;
+    background: linear-gradient(135deg, #b5651d, #8b4315);
+    color: #fff;
+    text-align: center;
+    border-radius: 14px;
+    font-weight: 800;
+    font-size: 16px;
+    text-decoration: none;
+    transition: 0.25s;
+    box-shadow: 0 4px 15px rgba(181, 101, 29, 0.35);
+}
+
+.btn-solicita-oferta:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(181, 101, 29, 0.45);
+}
+
+.buy-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+    margin-top: 18px;
+    flex-wrap: wrap;
+}
+
+.qty-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #f7f7f7;
+    border: 1px solid #ddd;
+    padding: 10px 12px;
+    border-radius: 12px;
+}
+
+.qty-wrap label {
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.qty-wrap input {
+    width: 72px;
+    padding: 10px 10px;
+    border-radius: 10px;
+    border: 1px solid #ccc;
+    font-size: 16px;
+    text-align: center;
+}
+
+.back-btn {
+    display: inline-block;
+    margin-top: 22px;
+    padding: 12px 18px;
+    background: #f3e7dc;
+    color: #8b4315;
+    text-decoration: none;
+    font-weight: 700;
+    border-radius: 12px;
+    transition: 0.25s;
+    border: 1px solid rgba(181, 101, 29, 0.12);
+}
+
+.back-btn:hover {
+    background: #ead6c1;
+    transform: translateY(-1px);
+}
+
+.stock-editor {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 12px;
+    background: #f9f9f9;
+    border: 1px dashed #d7d7d7;
+}
+
+.stock-editor form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.stock-editor select {
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #ccc;
+    background: #fff;
+}
+
+.stock-editor button {
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: none;
+    background: #b5651d;
+    color: #fff;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.stock-editor button:hover {
     background: #8b4315;
 }
-.header-contact .btn{
-    background:#fff;
-    color:#b5651d;
-    padding:12px 25px;
-    border-radius:8px;
-    text-decoration:none;
-    font-weight:500;
-    position:relative;
-    transition:0.3s;
-}
-.header-contact .btn:hover{
-    background:#8b4315;
-    color:#fff;
-    transform:translateY(-2px);
-}
 
-/* Footer General */
 footer {
-  background: #8C92AC; /* portocaliu când nu e dark mode */
-  color: #fff; /* tot textul alb */
-  padding: 50px 20px;
-  font-family: 'Roboto', sans-serif;
-  transition: background 0.3s, color 0.3s;
+    background: #8C92AC;
+    color: #fff;
+    padding: 50px 20px;
+    transition: background 0.3s, color 0.3s;
 }
 
-/* Footer Dark Mode */
 footer.dark-mode {
-  background: #222; /* întunecat când e dark mode */
+    background: #222;
 }
 
-/* Container flex */
 footer .footer-container {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 40px;
-  justify-content: flex-start;
-  align-items: flex-start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 40px;
+    max-width: 1200px;
+    margin: 0 auto;
+    align-items: flex-start;
 }
 
-/* Coloane footer */
 footer .footer-col {
-  flex: 1;
-  min-width: 200px;
+    flex: 1;
+    min-width: 200px;
 }
 
-/* Logo + descriere */
 footer .footer-logo img {
-  height: 50px;
-  width: auto;
-  display: block;
-  margin-bottom: 15px;
+    height: 50px;
+    width: auto;
+    margin-bottom: 15px;
 }
 
-/* Social icons */
-footer .footer-social {
-  display: flex;
-  gap: 10px;
-  margin-top: 5px;
-}
-
-footer .footer-social a {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  color: #fff; /* alb */
-  transition: color 0.3s;
-}
-
-footer .footer-social a:hover {
-  color: #fff; /* hover alb */
-}
-
-/* Linkuri */
 footer ul {
-  list-style: none;
-  padding: 0;
-  margin: 10px 0 20px 0;
-  line-height: 1.8;
+    list-style: none;
+    padding: 0;
+    margin: 10px 0 20px 0;
+    line-height: 1.8;
 }
 
 footer ul li a {
-  color: #fff; /* alb */
-  text-decoration: none;
-  transition: color 0.3s;
+    color: #fff;
+    text-decoration: none;
 }
 
-footer ul li a:hover {
-  color: #fff; /* hover alb */
+footer p,
+footer strong,
+footer span,
+footer li,
+footer blockquote {
+    color: #fff !important;
 }
 
-/* Text simplu în footer */
-footer p, footer strong, footer blockquote, footer span, footer li {
-  color: #fff !important; /* forțare alb pentru tot textul */
-}
-
-/* Copyright */
 footer .footer-bottom {
-  margin-top: 30px;
-  border-top: 1px solid rgba(255, 255, 255, 0.3);
-  padding-top: 15px;
-  font-size: 14px;
-  text-align: left;
+    max-width: 1200px;
+    margin: 30px auto 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.3);
+    padding-top: 15px;
+    font-size: 14px;
 }
 
 footer .footer-bottom a {
-  color: #fff; /* alb */
-  text-decoration: none;
-  margin: 0 8px;
+    color: #fff;
+    text-decoration: none;
+    margin: 0 8px;
 }
 
-footer .footer-bottom a:hover {
-  color: #fff; /* hover alb */
-}
-
-/* Responsiv */
-@media screen and (max-width: 768px) {
-  footer .footer-container {
-    flex-direction: column;
-    gap: 25px;
-  }
-}
-nav a{
-    margin:0 10px;
-    text-decoration:none;
-    color:#fff;
-    padding:8px 15px;
-    border-radius:8px;
-}
-nav a.active{
-    background:#8b4315;
-    color:#fff;
-}
-.page-wrapper{
-    max-width:1200px;
-    margin:50px auto;
-    padding:20px;
-    display:flex;
-    flex-wrap:wrap;
-    gap:40px;
-    justify-content:center;
-    align-items:flex-start;
-}
-.product-image{
-    flex:1;
-    min-width:350px;
-}
-.product-image img{
-    width:100%;
-    border-radius:16px;
-    box-shadow:0 8px 22px rgba(0,0,0,0.2);
-}
-.product-info{
-    flex:1.2;
-    min-width:350px;
-    background:#fff;
-    padding:30px;
-    border-radius:16px;
-    box-shadow:0 8px 22px rgba(0,0,0,0.15);
-}
-.product-info h1{
-    margin:0;
-    font-size:32px;
-    font-family:'Montserrat',sans-serif;
-}
-.product-info .type{
-    margin-top:5px;
-    font-weight:600;
-    color:#b5651d;
-}
-.price-box{
-    margin:20px 0;
-}
-.price-new{
-    font-size:28px;
-    font-weight:700;
-    color:#b5651d;
-}
-.price-old{
-    margin-left:10px;
-    color:#777;
-    text-decoration:line-through;
-}
-.product-info p{
-    line-height:1.6;
-    margin:10px 0;
-}
-
-/* CASUTE INFORMATII PRODUS */
-.info-cards{
-    display:grid;
-    grid-template-columns:repeat(2,1fr);
-    gap:20px;
-    margin-top:25px;
-}
-.info-card{
-    background:#f9f3ee;
-    padding:15px 20px;
-    border-radius:12px;
-    border:1px solid rgba(0,0,0,0.1);
-    transition:0.3s;
-}
-.info-card h4{
-    margin:0 0 5px 0;
-    color:#b5651d;
-    font-size:16px;
-}
-.info-card p{
-    margin:0;
-    font-weight:500;
-}
-
-/* BENEFICII SIMPLE */
-.benefits-simple{
-    margin-top:25px;
-}
-.benefits-simple ul{
-    list-style:none;
-    padding:0;
-}
-.benefits-simple li{
-    margin:8px 0;
-    font-weight:500;
-}
-
-/* CASUTE COMANDA / OFERTA */
-.action-cards{
-    display:grid;
-    grid-template-columns:repeat(2,1fr);
-    gap:20px;
-    margin-top:25px;
-}
-.action-card{
-    background:#b5651d;
-    color:#fff;
-    text-align:center;
-    padding:18px;
-    border-radius:12px;
-    font-weight:600;
-    cursor:pointer;
-    transition:0.3s;
-    text-decoration:none;
-}
-.action-card:hover{
-    background:#8b4315;
-    transform:translateY(-3px);
-}
-
-/* Buton inapoi */
-.back-btn{
-    display:inline-block;
-    margin-top:35px;
-    padding:14px 28px;
-    background:#b5651d;
-    color:#fff;
-    text-decoration:none;
-    font-weight:600;
-    font-size:16px;
-    border-radius:10px;
-    letter-spacing:0.5px;
-    transition:0.3s;
-}
-.back-btn:hover{
-    background:#8b4315;
-    transform:translateY(-2px);
-}
-@media screen and (max-width:768px){
-    .page-wrapper{
-        flex-direction:column;
-    }
-    .info-cards, .action-cards{
-        grid-template-columns:1fr;
-    }
-}
-/* Toggle */
-.dark-toggle {
-  cursor: pointer;
-  padding: 10px;
-  border-radius: 8px;
-  background: #fff;
-  color: #b5651d;
-  font-weight: 600;
-  transition: 0.3s;
-}
-.dark-toggle:hover {
-  background: #b5651d;
-  color: #fff;
-}
-
-/* BODY + TEXT */
 body.dark-mode {
-  background: #111;
-  color: #fdf6f0;
-}
-body.dark-mode p,
-body.dark-mode h1,
-body.dark-mode h2,
-body.dark-mode h3,
-body.dark-mode h4,
-body.dark-mode li {
-  color: #fdf6f0;
+    background: #111;
+    color: #fdf6f0;
 }
 
-/* HEADER */
-body.dark-mode header {
-  background: #222;
-  color: #fdf6f0;
-}
-body.dark-mode nav a {
-  background: #333;
-  color: #fdf6f0;
-}
-body.dark-mode nav a:hover,
-body.dark-mode nav a.active {
-  background: #8b4315;
-  color: #fff;
-}
-
-/* CARDURI / BOXURI / PANOURI */
+body.dark-mode .product-image-box,
 body.dark-mode .product-info,
 body.dark-mode .info-card,
-body.dark-mode .action-card,
-body.dark-mode .benefits-simple li {
-  background: #222;
-  color: #fdf6f0;
-  box-shadow: 0 0 15px rgba(255,255,255,0.05);
+body.dark-mode .qty-wrap,
+body.dark-mode .stock-editor {
+    background: #1d1d1d;
+    color: #fdf6f0;
+    border-color: #333;
 }
 
-/* PREȚ */
-body.dark-mode .price-new {
-  color: #e09c50;
-}
-body.dark-mode .price-old {
-  color: #aaa;
+body.dark-mode .short-desc,
+body.dark-mode .info-card p {
+    color: #e4e4e4;
 }
 
-/* BUTOANE */
-body.dark-mode .action-card,
+body.dark-mode .info-card h4 {
+    color: #ffcb9a;
+}
+
 body.dark-mode .back-btn {
-  background: #8b4315;
-  color: #fff;
-}
-body.dark-mode .action-card:hover,
-body.dark-mode .back-btn:hover {
-  background: #b5651d;
+    background: #2a2a2a;
+    color: #ffcb9a;
 }
 
-/* FOOTER */
-body.dark-mode footer {
-  background: #222;
-  color: #fdf6f0;
-}
-body.dark-mode footer a,
-body.dark-mode footer p,
-body.dark-mode footer li,
-body.dark-mode footer strong,
-body.dark-mode footer span {
-  color: #fdf6f0 !important;
+body.dark-mode .qty-wrap input,
+body.dark-mode .stock-editor select {
+    background: #111;
+    color: #fdf6f0;
+    border-color: #444;
 }
 
-/* Harta (dacă apare) */
-body.dark-mode iframe {
-  filter: invert(90%) contrast(90%);
+@media (max-width: 980px) {
+    .page-wrapper {
+        grid-template-columns: 1fr;
+    }
+
+    .product-image {
+        position: static;
+    }
 }
 
+@media (max-width: 768px) {
+    header {
+        padding: 12px 16px;
+    }
+
+    .menu-toggle {
+        display: flex;
+    }
+
+    #mainNav {
+        display: none;
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        margin-top: 10px;
+    }
+
+    #mainNav.mobile-open {
+        display: flex;
+    }
+
+    #mainNav a {
+        width: 100%;
+        text-align: left;
+        padding: 12px 14px;
+    }
+
+    .page-wrapper {
+        margin-top: 20px;
+        padding: 0 12px;
+        gap: 18px;
+    }
+
+    .product-info {
+        padding: 18px;
+    }
+
+    .info-cards,
+    .action-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .buy-row {
+        flex-direction: column;
+    }
+
+    .qty-wrap {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .qty-wrap input {
+        width: 88px;
+    }
+
+    .action-card,
+    .btn-solicita-oferta,
+    .back-btn,
+    .stock-editor button {
+        width: 100%;
+    }
+
+    footer {
+        padding: 40px 16px;
+    }
+
+    footer .footer-container {
+        flex-direction: column;
+        gap: 25px;
+    }
+}
+
+@media (max-width: 420px) {
+    .page-wrapper {
+        padding: 0 10px;
+    }
+
+    .product-info h1 {
+        font-size: 24px;
+    }
+
+    .price-new {
+        font-size: 24px;
+    }
+
+    .product-image-box {
+        padding: 10px;
+    }
+
+    .qty-wrap {
+        gap: 8px;
+    }
+
+    .qty-wrap input {
+        width: 76px;
+    }
+
+    .info-card,
+    .stock-editor {
+        padding: 13px;
+    }
+
+    .map-note {
+        font-size: 13px;
+    }
+}
 </style>
 </head>
 <body>
 
 <header id="header">
-  <div style="display:flex;align-items:center;justify-content:space-between;width:100%;flex-wrap:wrap;">
-    <div style="display:flex;align-items:center;gap:15px;">
-      <img src="Image41.png" alt="Logo" style="height:50px;">
+    <div class="logo">
+        <a href="Acasa.php" style="display:inline-flex;align-items:center;text-decoration:none;">
+            <img src="Image41.png" alt="Logo">
+        </a>
     </div>
 
-    <div class="menu-toggle" onclick="toggleMenu()">
-      <div></div>
-      <div></div>
-      <div></div>
+    <nav id="mainNav">
+        <a href="Acasa.php">Acasă</a>
+        <a href="Colectie.php">Colecție</a>
+        <a href="DespreNoi.php">Despre Noi</a>
+        <a href="Contact.php">Contact</a>
+        <a href="CosulMeu.php">Cosul Meu</a>
+        <a href="ContulMeu.php">Contul Meu</a>
+    </nav>
+
+    <div class="menu-toggle" onclick="toggleMenu()" aria-label="Deschide meniul">
+        <div></div>
+        <div></div>
+        <div></div>
     </div>
-  </div>
 </header>
-<div class="page-wrapper">
 
+<div class="page-wrapper">
     <div class="product-image">
-    <img src="<?= htmlspecialchars($imageForOutput . $cacheBuster) ?>"
-         alt="<?= htmlspecialchars($item['name'] ?? 'Produs') ?>">
+        <div class="product-image-box">
+            <img src="<?= e($imageForOutput . $cacheBuster) ?>" alt="<?= e($item['name'] ?? 'Produs') ?>">
+        </div>
     </div>
 
     <div class="product-info">
-        <h1><?= htmlspecialchars($item['name']) ?></h1>
+        <h1><?= e($item['name'] ?? '') ?></h1>
 
         <div class="price-box">
-            <span class="price-new" id="priceDisplay">
-            <?= formatPrice($item['price']) ?>
-            </span>
-        </div>
-
-        <p><?= nl2br(htmlspecialchars($item['description'])) ?></p>
-
-        <!-- INFORMATII PRODUS -->
-        <div class="info-cards">
-        <div class="info-card">
-            <h4>Disponibilitate</h4>
-        
-            <?php if ($isStockEditor): ?>
-                <form method="post" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <select name="stock_value" style="padding:8px; border-radius:6px; border:1px solid #ccc;">
-                        <option value="1" <?= (isset($item['stock']) && $item['stock'] > 0) ? 'selected' : '' ?>>In stoc</option>
-                        <option value="0" <?= (!isset($item['stock']) || $item['stock'] <= 0) ? 'selected' : '' ?>>Stoc epuizat</option>
-                    </select>
-        
-                    <button type="submit" name="update_stock" class="action-card" style="border:none;">
-                        Salveaza
-                    </button>
-                </form>
+            <?php if (!$isCerere && $priceVal !== null && $priceVal !== '' && (float)$priceVal > 0): ?>
+                <div id="priceDisplay" class="price-new"><?= e(formatPrice($priceVal)) ?></div>
             <?php else: ?>
-                <p><?= (isset($item['stock']) && $item['stock'] > 0 ? 'In stoc' : 'Stoc epuizat') ?></p>
+                <div class="price-cerere">Preț la cerere</div>
             <?php endif; ?>
         </div>
 
+        <p class="short-desc"><?= nl2br(e((string)($item['description'] ?? ''))) ?></p>
 
-        <?php
-        // determină tipul produsului corect din $item sau din numărul imaginii
-        $productType = $item['type'] ?? '';
-        
-        // dacă nu există tip în DB, deducem din numărul imaginii
-        if (empty($productType) && $imgNum !== null) {
-            if ($imgNum >= 61 && $imgNum <= 67) {
-                $productType = 'Ingerasi';
-            } elseif ($imgNum >= 71 && $imgNum <= 72) {
-                $productType = 'Mandala';
-            } elseif ($imgNum >= 81 && $imgNum <= 93) {
-                $productType = 'Tablouri';
-            } elseif ($imgNum >= 1 && $imgNum <= 60) {
-                $productType = 'PsyGeometry';
-            } elseif ($imgNum >= 131 && $imgNum <= 143) {
-                $productType = 'PsyGeometry Rotunde';
-            }
-        }
-        
-        // ascunde garantia pentru Mandala si Ingerasi
-        $hideWarranty = in_array($productType, ['Mandala', 'Ingerasi'], true);
-        ?>
+        <div class="section-title">Detalii produs</div>
 
-        <!-- ACTIUNI -->
-        <div class="action-cards">
-            <a href="tel:+40123456789" class="action-card">Comanda telefonic</a>
-            <a href="#" class="action-card">Solicita oferta</a>
+        <div class="info-cards">
+            <div class="info-card">
+                <h4>Disponibilitate</h4>
+                <?php if ($isOutOfStock): ?>
+                    <p>Solicită ofertă</p>
+                <?php else: ?>
+                    <p>Stoc: <?= (int)$item['stock'] ?></p>
+
+                    <?php if ($isStockEditor): ?>
+                        <div class="stock-editor">
+                            <form method="post">
+                                <select name="stock_value">
+                                    <option value="1" <?= ((int)($item['stock'] ?? 0) > 0) ? 'selected' : '' ?>>În stoc</option>
+                                    <option value="0" <?= ((int)($item['stock'] ?? 0) <= 0) ? 'selected' : '' ?>>La cerere</option>
+                                </select>
+                                <button type="submit" name="update_stock">Salvează</button>
+                            </form>
+                        </div>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
+
+            <div class="info-card">
+                <h4>Dimensiuni</h4>
+                <p><?= e($dimensionsText) ?></p>
+            </div>
+
+            <div class="info-card full">
+                <h4>Material</h4>
+                <p><?= e($materialText) ?></p>
+            </div>
         </div>
 
-        <!-- ADAUGARE IN COS -->
-        <form method="post" style="margin-top:20px; display:flex; gap:10px; align-items:center;">
-        <input type="number"
-               id="qtyInput"
-               name="qty"
-               value="1"
-               min="1"
-               style="width:60px; padding:8px; border-radius:6px; border:1px solid #ccc;">
+        <div class="section-title">Acțiuni rapide</div>
 
-            <button type="submit"
-                    name="add_to_cart"
-                    class="action-card"
-                    style="flex:1;">
-                Adauga in cos
-            </button>
-        </form>
+        <div class="action-cards">
+            <a href="tel:+40753508461" class="action-card secondary">📞 Comandă telefonic</a>
 
-        <a href="Colectie.php" class="back-btn">Inapoi la colectie</a>
+            <?php if (!$isCerere): ?>
+                <a href="Contact.php" class="action-card">✉️ Întreabă-ne</a>
+            <?php else: ?>
+                <a href="<?= e($contactOfertaUrl) ?>" class="action-card">✉️ Întreabă-ne</a>
+            <?php endif; ?>
+        </div>
+
+        <?php if ($isCerere): ?>
+            <a href="<?= e($contactOfertaUrl) ?>" class="btn-solicita-oferta">
+                📩 Solicită ofertă pentru acest produs
+            </a>
+        <?php elseif (isset($item['stock']) && (int)$item['stock'] > 0): ?>
+            <form method="post" class="buy-row">
+                <div class="qty-wrap">
+                    <label for="qtyInput">Cantitate</label>
+                    <input
+                        type="number"
+                        id="qtyInput"
+                        name="qty"
+                        value="1"
+                        min="1"
+                        max="<?= (int)$item['stock'] ?>"
+                    >
+                </div>
+
+                <button type="submit" name="add_to_cart" class="action-card" style="flex:1;">
+                    🛒 Adaugă în coș
+                </button>
+            </form>
+        <?php endif; ?>
+
+        <a href="Colectie.php" class="back-btn">← Înapoi la colecție</a>
     </div>
-
 </div>
 
 <footer id="footer">
-  <div class="footer-container">
+    <div class="footer-container">
+        <div class="footer-col">
+            <div class="footer-logo">
+                <img src="Image41.png" alt="Sherghei Covoare">
+            </div>
+            <p>Primul an prin care aducem covoare tradiționale și moderne în casa ta.</p>
+        </div>
 
-    <div class="footer-col">
-      <div class="footer-logo">
-        <img src="Image41.png" alt="Sherghei Covoare">
-      </div>
-      <p>Primul an prin care aducem covoare traditionale si moderne in casa ta.</p>
+        <div class="footer-col">
+            <strong>Navigare</strong>
+            <ul>
+                <li><a href="Acasa.php">Acasa</a></li>
+                <li><a href="Colectie.php">Colectie</a></li>
+                <li><a href="DespreNoi.php">Despre Noi</a></li>
+                <li><a href="Contact.php">Contact</a></li>
+                <li><a href="CosulMeu.php">Cosul Meu</a></li>
+                <li><a href="ContulMeu.php">Contul Meu</a></li>
+            </ul>
+        </div>
 
-      <div class="footer-social">
-        <a href="https://www.facebook.com/maestro.fortunato/" target="_blank" title="Facebook">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 2h-3a4 4 0 0 0-4 4v3H8v4h3v8h4v-8h3l1-4h-4V6a1 1 0 0 1 1-1h3z"/>
-          </svg>
-        </a>
-
-        <a href="https://www.instagram.com/hariharago?igsh=MXd5dHd5ZzY2ZnBpaw==" target="_blank" title="Instagram">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
-            <path d="M16 11.37a4 4 0 1 1-7.94 1.26 4 4 0 0 1 7.94-1.26z"/>
-            <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
-          </svg>
-        </a>
-      </div>
+        <div class="footer-col">
+            <strong>Contact</strong>
+            <p>Adresa, Craiova, Dolj</p>
+            <p>Telefon, 0753 508 461</p>
+            <p>Email, office@magazinpsy.ro</p>
+        </div>
     </div>
 
-
-
-    <div class="footer-col">
-      <strong>Servicii</strong>
-      <ul>
-        <li><a href="#">Vanzare produse psygeometry</a></li>
-        <li><a href="#">Consultanta gratuita</a></li>
-        <li><a href="#">Livrare la domiciliu</a></li>
-      </ul>
+    <div class="footer-bottom">
+        <p>© 2024 Sherghei Covoare. Toate drepturile rezervate.</p>
+        <a href="TermeniSiConditii.php">Termeni si conditii</a> |
+        <a href="PoliticaDeConfidentialitate.php">Politica de confidentialitate</a>
     </div>
-
-    <div class="footer-col">
-      <strong>Contact</strong>
-      <p>Adresa, Craiova,Dolj</p>
-      <p>Telefon, 0764.049.235</p>
-      <p>Email, office@magazinpsy.ro</p>
-      <p>Program, Luni Sambata 9 18</p>
-    </div>
-
-  </div>
-
-  <div class="footer-bottom">
-    <p>© 2024 Sherghei Covoare. Toate drepturile rezervate.</p>
-    <a href="#">Termeni si conditii</a> |
-    <a href="#">Politica de confidentialitate</a>
-  </div>
 </footer>
 
 <script>
-function toggleDarkMode(){
-    document.body.classList.toggle('dark-mode');
-    document.querySelector('header').classList.toggle('dark-mode');
-    document.querySelector('footer').classList.toggle('dark-mode');
-}
-const pricePerUnit = <?= (float)$item['price'] ?>;
+(function () {
+    'use strict';
 
-const qtyInput = document.getElementById('qtyInput');
-const priceDisplay = document.getElementById('priceDisplay');
-
-function updatePrice() {
-    let qty = parseInt(qtyInput.value);
-
-    if (isNaN(qty) || qty < 1) {
-        qty = 1;
-        qtyInput.value = 1;
+    function toggleMenu() {
+        const nav = document.getElementById('mainNav');
+        if (!nav) return;
+        nav.classList.toggle('mobile-open');
     }
+    window.toggleMenu = toggleMenu;
 
-    const total = pricePerUnit * qty;
+    const qtyInput = document.getElementById('qtyInput');
+    const priceDisplay = document.getElementById('priceDisplay');
 
-    priceDisplay.innerText = total.toFixed(2).replace('.', ',') + ' Lei';
-}
+    <?php if (!$isCerere): ?>
+    const pricePerUnit = <?= (float)($item['price'] ?? 0) ?>;
 
-qtyInput.addEventListener('input', updatePrice);
+    if (qtyInput && priceDisplay) {
+        qtyInput.addEventListener('input', function () {
+            let qty = parseInt(this.value, 10);
+
+            if (isNaN(qty) || qty < 1) {
+                qty = 1;
+                this.value = 1;
+            }
+
+            const maxQty = parseInt(this.max || '1', 10);
+            if (!isNaN(maxQty) && qty > maxQty) {
+                qty = maxQty;
+                this.value = maxQty;
+            }
+
+            priceDisplay.innerText = (pricePerUnit * qty).toFixed(2).replace('.', ',') + ' Lei';
+        });
+    }
+    <?php endif; ?>
+
+    window.addEventListener('resize', function () {
+        if (window.innerWidth > 768) {
+            const nav = document.getElementById('mainNav');
+            if (nav) nav.classList.remove('mobile-open');
+        }
+    });
+})();
 </script>
 </body>
 </html>

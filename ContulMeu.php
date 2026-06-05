@@ -1,22 +1,9 @@
 <?php
+declare(strict_types=1);
+
 session_start();
 
-/* ================= LOGOUT (PRIMUL) ================= */
-if (isset($_GET['logout'])) {
-    session_unset();        // sterge toate variabilele de sesiune
-    session_destroy();      // distruge sesiunea
-    header("Location: Login.php");
-    exit;
-}
-
-/* ================= VERIFICARE LOGIN ================= */
-if (!isset($_SESSION['user_id'])) {
-    header("Location: Login.php");
-    exit;
-}
-
 /* ================= CONEXIUNE BD ================= */
-// Conexiune DB corectata
 $dbHost = 'localhost';
 $dbName = 'magazi15_ShergeiCovoare';
 $dbUser = 'magazi15_Alex';
@@ -30,21 +17,363 @@ try {
         $dbPass,
         [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         ]
     );
 } catch (PDOException $e) {
-    // Pentru debugging: permite sa vezi eroarea. In productie logheaza si afiseaza un mesaj generic.
     exit("Eroare DB: " . $e->getMessage());
 }
+
+/* ================= HELPERE ================= */
+function h($value): string
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+
+function sourceLabel(string $source): string
+{
+    switch ($source) {
+        case 'youtube':
+            return 'YouTube';
+        case 'instagram':
+            return 'Instagram';
+        case 'facebook':
+            return 'Facebook';
+        case 'tiktok':
+            return 'TikTok';
+        case 'direct':
+            return 'Direct';
+        default:
+            return 'Other';
+    }
+}
+
+function platformLabel(string $platform): string
+{
+    return sourceLabel($platform);
+}
+
+function buildTrackUrl(?int $linkId): string
+{
+    if (!$linkId) {
+        return '#';
+    }
+    return 'ContulMeu.php?track=1&link_id=' . (int)$linkId;
+}
+
+function upsertDailyClick(PDO $pdo, int $linkId, bool $uniqueFlag): void
+{
+    $stmt = $pdo->prepare("
+        SELECT id, clicks_total, clicks_unique
+        FROM social_daily_stats
+        WHERE link_id = ? AND stat_date = CURDATE()
+        LIMIT 1
+    ");
+    $stmt->execute([$linkId]);
+    $row = $stmt->fetch();
+
+    if ($row) {
+        $stmt = $pdo->prepare("
+            UPDATE social_daily_stats
+            SET clicks_total = clicks_total + 1,
+                clicks_unique = clicks_unique + ?
+            WHERE id = ?
+        ");
+        $stmt->execute([$uniqueFlag ? 1 : 0, (int)$row['id']]);
+        return;
+    }
+
+    $stmt = $pdo->prepare("
+        INSERT INTO social_daily_stats (link_id, stat_date, clicks_total, clicks_unique)
+        VALUES (?, CURDATE(), 1, ?)
+    ");
+    $stmt->execute([$linkId, $uniqueFlag ? 1 : 0]);
+}
+
+/* ================= LOGARE VIZITE (guest / logged_in) ================= */
+require_once __DIR__ . '/social_tracker.php';
+recordSocialVisit($pdo);
+
+/* ================= LOGOUT ================= */
+if (isset($_GET['logout'])) {
+    $_SESSION = [];
+
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(
+            session_name(),
+            '',
+            time() - 42000,
+            $params['path'],
+            $params['domain'],
+            $params['secure'],
+            $params['httponly']
+        );
+    }
+
+    session_destroy();
+    header("Location: Login.php");
+    exit;
+}
+
+/* ================= VERIFICARE LOGIN ================= */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: Login.php");
+    exit;
+}
+
 /* ================= DATE UTILIZATOR LOGAT ================= */
 $stmt = $pdo->prepare("SELECT username, email FROM users WHERE id = ?");
 $stmt->execute([$_SESSION['user_id']]);
 $user = $stmt->fetch();
 
-/* Protectie XSS */
-$username = htmlspecialchars($user['username'] ?? '');
-$email    = htmlspecialchars($user['email'] ?? '');
+if (!$user) {
+    session_unset();
+    session_destroy();
+    header("Location: Login.php");
+    exit;
+}
+
+$username = trim((string)($user['username'] ?? ''));
+$email = trim((string)($user['email'] ?? ''));
+$displayName = $username !== '' ? $username : 'Contul meu';
+
+/* ================= ACCES MONITORIZARE DOAR PENTRU 2 EMAILURI ================= */
+$allowedEmails = [
+    'deaconunicolaealexandru@gmail.com',
+    'Ownvision211@gmail.com',
+];
+$canSeeMonitor = in_array($email, $allowedEmails, true);
+
+/* ================= LINKURI SOCIALE DEFAULT / SEED ================= */
+$defaultSocialLinks = [
+    'youtube' => [
+        'name' => 'YouTube',
+        'target_url' => 'https://www.youtube.com/@IngerasiiPacii/shorts',
+    ],
+    'instagram' => [
+        'name' => 'Instagram',
+        'target_url' => 'https://www.instagram.com/magazin_psy/',
+    ],
+    'facebook' => [
+        'name' => 'Facebook',
+        'target_url' => 'https://www.facebook.com/people/MagazinPsy/61590363542827/',
+    ],
+    'tiktok' => [
+        'name' => 'TikTok',
+        'target_url' => 'https://www.tiktok.com/@lucrubinefacut',
+    ],
+];
+
+try {
+    $stmt = $pdo->query("SELECT id, name, platform, target_url, is_active FROM social_links");
+    $existingLinks = $stmt->fetchAll();
+} catch (Throwable $e) {
+    $existingLinks = [];
+}
+
+$linksByPlatform = [];
+foreach ($existingLinks as $link) {
+    $platform = strtolower((string)($link['platform'] ?? ''));
+    if ($platform !== '' && !isset($linksByPlatform[$platform])) {
+        $linksByPlatform[$platform] = $link;
+    }
+}
+
+/* Seed lipsă */
+foreach ($defaultSocialLinks as $platform => $data) {
+    if (!isset($linksByPlatform[$platform])) {
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO social_links (name, platform, target_url, is_active)
+                VALUES (?, ?, ?, 1)
+            ");
+            $stmt->execute([
+                $data['name'],
+                $platform,
+                $data['target_url']
+            ]);
+
+            $newId = (int)$pdo->lastInsertId();
+            $linksByPlatform[$platform] = [
+                'id' => $newId,
+                'name' => $data['name'],
+                'platform' => $platform,
+                'target_url' => $data['target_url'],
+                'is_active' => 1,
+            ];
+        } catch (Throwable $e) {
+            // silent fail
+        }
+    }
+}
+
+/* ================= TRACK CLICK (REDIRECT) ================= */
+if (isset($_GET['track'], $_GET['link_id'])) {
+    $linkId = (int)$_GET['link_id'];
+
+    if ($linkId > 0) {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT id, target_url, is_active
+                FROM social_links
+                WHERE id = ? AND is_active = 1
+                LIMIT 1
+            ");
+            $stmt->execute([$linkId]);
+            $link = $stmt->fetch();
+
+            if ($link && !empty($link['target_url'])) {
+                $ipHash = hashIp(getClientIp());
+                $userAgent = substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255);
+                $referrer = substr((string)($_SERVER['HTTP_REFERER'] ?? ''), 0, 2000);
+                $countryCode = substr(getCountryCode(), 0, 10);
+                $sessionKey = substr(getSessionKey(), 0, 128);
+
+                $stmt = $pdo->prepare("
+                    SELECT id
+                    FROM social_clicks
+                    WHERE link_id = ?
+                      AND session_key = ?
+                      AND DATE(clicked_at) = CURDATE()
+                    LIMIT 1
+                ");
+                $stmt->execute([$linkId, $sessionKey]);
+                $alreadyClickedToday = (bool)$stmt->fetchColumn();
+
+                $stmt = $pdo->prepare("
+                    INSERT INTO social_clicks
+                        (link_id, clicked_at, ip_hash, user_agent, referrer, country_code, session_key)
+                    VALUES
+                        (?, NOW(), ?, ?, ?, ?, ?)
+                ");
+                $stmt->execute([
+                    $linkId,
+                    $ipHash,
+                    $userAgent,
+                    $referrer,
+                    $countryCode,
+                    $sessionKey
+                ]);
+
+                upsertDailyClick($pdo, $linkId, !$alreadyClickedToday);
+
+                header('Location: ' . $link['target_url'], true, 302);
+                exit;
+            }
+        } catch (Throwable $e) {
+            // silent fail
+        }
+    }
+
+    header("Location: Acasa.php", true, 302);
+    exit;
+}
+
+/* ================= TRAFIC SOCIAL PE SITE ================= */
+$monitorStats = [];
+$monitorDaily = [];
+$clickStatsByLink = [];
+$clickDaily = [];
+
+if ($canSeeMonitor) {
+    try {
+        $stmt = $pdo->query("
+            SELECT
+                source,
+                COUNT(*) AS total_visits,
+                COUNT(DISTINCT ip_hash) AS unique_visits,
+                MAX(visited_at) AS last_visit
+            FROM social_visits
+            GROUP BY source
+            ORDER BY FIELD(source, 'youtube', 'instagram', 'facebook', 'tiktok', 'direct', 'other')
+        ");
+        $monitorStats = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        $monitorStats = [];
+    }
+
+    try {
+        $stmt = $pdo->query("
+            SELECT
+                visit_date AS day,
+                COUNT(*) AS total_visits,
+                COUNT(DISTINCT ip_hash) AS unique_visits
+            FROM social_visits
+            GROUP BY visit_date
+            ORDER BY day DESC
+            LIMIT 30
+        ");
+        $monitorDaily = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        $monitorDaily = [];
+    }
+
+    try {
+        $stmt = $pdo->query("
+            SELECT
+                l.id,
+                l.name,
+                l.platform,
+                l.target_url,
+                l.is_active,
+                COALESCE(COUNT(c.id), 0) AS total_clicks,
+                COALESCE(COUNT(DISTINCT c.session_key), 0) AS unique_clicks,
+                MAX(c.clicked_at) AS last_click
+            FROM social_links l
+            LEFT JOIN social_clicks c ON c.link_id = l.id
+            GROUP BY l.id, l.name, l.platform, l.target_url, l.is_active
+            ORDER BY FIELD(l.platform, 'youtube', 'instagram', 'facebook', 'tiktok'), l.id
+        ");
+        $clickStatsByLink = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        $clickStatsByLink = [];
+    }
+
+    try {
+        $stmt = $pdo->query("
+            SELECT
+                stat_date AS day,
+                SUM(clicks_total) AS total_clicks,
+                SUM(clicks_unique) AS unique_clicks
+            FROM social_daily_stats
+            GROUP BY stat_date
+            ORDER BY day DESC
+            LIMIT 30
+        ");
+        $clickDaily = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        $clickDaily = [];
+    }
+}
+
+$statsBySource = [];
+foreach ($monitorStats as $row) {
+    $statsBySource[(string)$row['source']] = $row;
+}
+
+$trafficLabels = ['YouTube', 'Instagram', 'Facebook', 'TikTok', 'Direct'];
+$trafficTotals = [
+    (int)($statsBySource['youtube']['total_visits'] ?? 0),
+    (int)($statsBySource['instagram']['total_visits'] ?? 0),
+    (int)($statsBySource['facebook']['total_visits'] ?? 0),
+    (int)($statsBySource['tiktok']['total_visits'] ?? 0),
+    (int)($statsBySource['direct']['total_visits'] ?? 0),
+];
+$trafficUnique = [
+    (int)($statsBySource['youtube']['unique_visits'] ?? 0),
+    (int)($statsBySource['instagram']['unique_visits'] ?? 0),
+    (int)($statsBySource['facebook']['unique_visits'] ?? 0),
+    (int)($statsBySource['tiktok']['unique_visits'] ?? 0),
+    (int)($statsBySource['direct']['unique_visits'] ?? 0),
+];
+
+$trackedLinks = [];
+foreach (['youtube', 'instagram', 'facebook', 'tiktok'] as $platform) {
+    if (isset($linksByPlatform[$platform])) {
+        $trackedLinks[$platform] = $linksByPlatform[$platform];
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="ro">
@@ -53,138 +382,13 @@ $email    = htmlspecialchars($user['email'] ?? '');
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Contul Meu</title>
 <style>
-/* ================= GENERAL ================= */
 body {
   margin: 0;
-  font-family: 'Roboto', sans-serif;
+  font-family: Arial, sans-serif;
   background: #fff;
   color: #333;
 }
 
-/* ================= NAV ================= */
-nav {
-  display: flex;
-  justify-content: center;
-  gap: 15px;
-  margin: 20px 0;
-  flex-wrap: wrap;
-  position: relative;
-  transition: max-height 0.5s;
-}
-
-nav a {
-  text-decoration: none;
-  padding: 10px 18px;
-  background: #fff;
-  color: #b5651d;
-  border-radius: 8px;
-  transition: 0.3s;
-  font-weight: 500;
-}
-
-nav a.active {
-  background: #8b4315;
-  color: #fff;
-}
-
-nav a:hover {
-  background: #b5651d;
-  color: #fff;
-  transform: translateY(-2px);
-}
-
-/* ================= HERO ================= */
-.hero {
-  position: relative;
-  text-align: center;
-  padding: 120px 20px;
-  background: url('hero-bg.jpg') center/cover no-repeat;
-  color: #fff;
-  overflow: hidden;
-  transition: transform 0.3s;
-}
-
-.hero::before {
-  content: "";
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  background: rgba(0,0,0,0.4);
-}
-
-.hero h2, .hero p, .hero .btn {
-  position: relative;
-  animation: fadeUp 1s ease forwards;
-}
-
-.hero .btn {
-  margin: 10px;
-  padding: 14px 28px;
-  background: #b5651d;
-  color: #fff;
-  border-radius: 8px;
-  text-decoration: none;
-  display: inline-block;
-  font-weight: 500;
-  transition: 0.3s;
-}
-
-.hero .btn:hover {
-  transform: translateY(-3px) scale(1.05);
-}
-
-/* ================= STATS ================= */
-.stats {
-  display: flex;
-  justify-content: center;
-  gap: 30px;
-  margin: 50px 0;
-  text-align: center;
-  flex-wrap: wrap;
-}
-
-.stats div {
-  background: #fff;
-  padding: 25px;
-  border-radius: 16px;
-  box-shadow: 0 8px 16px rgba(0,0,0,0.15);
-  flex: 1 1 150px;
-  margin: 10px;
-  transition: transform 0.3s, box-shadow 0.3s;
-}
-
-.stats div:hover {
-  transform: translateY(-8px) scale(1.03);
-  box-shadow: 0 12px 28px rgba(0,0,0,0.25);
-}
-
-/* ================= CARDS ================= */
-.card, .account-card {
-  background: #fff;
-  border-radius: 16px;
-  padding: 25px;
-  margin: 20px;
-  box-shadow: 0 8px 16px rgba(0,0,0,0.15);
-  transition: transform 0.3s, box-shadow 0.3s, background 0.3s, opacity 0.5s;
-  opacity: 0;
-  transform: translateY(20px);
-}
-
-.card.visible, .account-card.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.card:hover, .account-card:hover {
-  transform: translateY(-6px);
-  box-shadow: 0 18px 45px rgba(0,0,0,0.22);
-}
-
-.card:hover h3, .card:hover p, .account-card:hover h3, .account-card:hover p {
-  color: #b5651d;
-}
-
-/* ================= HEADER ================= */
 header {
   position: sticky;
   top: 0;
@@ -203,25 +407,13 @@ header > div {
   flex-wrap: wrap;
 }
 
-/* Logo */
-header .logo {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-}
-
-header .logo img {
-  height: 50px;
-}
-
-/* Nav */
 header nav {
   display: flex;
   justify-content: center;
   align-items: center;
   gap: 15px;
   flex: 1;
-  overflow: visible;
+  flex-wrap: wrap;
 }
 
 header nav a {
@@ -234,13 +426,16 @@ header nav a {
   transition: 0.3s;
 }
 
-header nav a:hover, header nav a.active {
+header nav a:hover,
+header nav a.active {
   background: #8b4315;
   color: #fff;
 }
 
-/* Dropdown */
-header nav .dropdown { position: relative; }
+header nav .dropdown {
+  position: relative;
+}
+
 header nav .dropdown-content {
   position: absolute;
   top: calc(100% + 8px);
@@ -269,89 +464,136 @@ header nav .dropdown:hover .dropdown-content {
   display: flex;
 }
 
-header nav .dropdown-content.open { display: flex; }
-
-/* ================= HEADER RIGHT ================= */
-.header-contact {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  position: relative;
-  z-index: 2000;
-}
-
-/* Dark Mode Toggle */
-.dark-toggle {
-  cursor: pointer;
-  background: #fff;
-  border: none;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  font-size: 20px;
-  color: #b5651d;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 6000;
-  transition: transform 0.2s;
-}
-
-.dark-toggle:hover { transform: scale(1.1); }
-
-/* ================= HAMBURGER ================= */
 .menu-toggle {
   display: none;
   flex-direction: column;
   cursor: pointer;
+  gap: 5px;
 }
 
-  .menu-toggle div {
-    width: 28px;
-    height: 3px;
-    background: #fff;
-    border-radius: 3px;
-    transition: transform 0.22s ease, opacity 0.18s ease;
-  }
-
-/* ================= MOBILE ================= */
-@media (max-width: 768px) {
-  header nav { display: none; flex-direction: column; width: 100%; margin-top: 10px; gap: 10px; }
-  header nav.mobile-open { display: flex; }
-  .menu-toggle { display: flex; }
-  .header-contact { width: 100%; justify-content: center; margin-top: 10px; }
-  .dark-toggle { position: relative; top: auto; right: auto; }
-}
- /* când meniul e deschis prin JS (clasa mobile-open) */
-  header nav.mobile-open {
-    display: flex;
-    max-height: 1200px; /* suficient pentru câteva linkuri */
-    padding-bottom: 12px;
-  }
-
-/* ================= DARK MODE ================= */
-body.dark-mode {
-  background: #111;
-  color: #eee;
+.menu-toggle div {
+  width: 30px;
+  height: 3px;
+  background: #fff;
+  border-radius: 3px;
 }
 
-body.dark-mode header { background: #222; }
-body.dark-mode header nav a { background: #333; color: #eee; }
-body.dark-mode header nav a:hover,
-body.dark-mode header nav a.active { background: #555; color: #fff; }
-body.dark-mode .account-card { background: #1e1e1e; }
-body.dark-mode .account-card p { color: #ddd; }
-body.dark-mode footer { background: #222; }
+.myaccount {
+  max-width: 1200px;
+  margin: auto;
+  padding: 20px;
+}
 
-/* ================= FOOTER ================= */
+.account-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 30px;
+  gap: 15px;
+}
+
+.account-info p {
+  margin: 2px 0;
+  font-weight: 500;
+}
+
+.account-info .fullname {
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.account-footer {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.account-footer a,
+.btn-primary {
+  display: inline-block;
+  background: #b5651d;
+  color: #fff;
+  padding: 12px 28px;
+  border-radius: 8px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: 0.3s;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  border: none;
+  cursor: pointer;
+}
+
+.account-footer a:hover,
+.btn-primary:hover {
+  background: #8b4315;
+  transform: translateY(-2px) scale(1.03);
+}
+
+.section-title {
+  margin: 35px 0 15px;
+  font-size: 22px;
+}
+
+.account-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+}
+
+.card h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.card p {
+  margin: 5px 0;
+}
+
+.monitor-section {
+  margin-top: 30px;
+}
+
+.monitor-section h2 {
+  margin-bottom: 15px;
+}
+
+.monitor-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+}
+
+.monitor-table th,
+.monitor-table td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  text-align: left;
+}
+
+.monitor-table th {
+  background: #8C92AC;
+  color: #fff;
+}
+
 footer {
   background: #8C92AC;
   color: #fff;
   padding: 50px 20px;
-  transition: background 0.3s, color 0.3s;
+  margin-top: 40px;
 }
-
-footer.dark-mode { background: #222; }
 
 footer .footer-container {
   display: flex;
@@ -361,173 +603,179 @@ footer .footer-container {
   align-items: flex-start;
 }
 
-footer .footer-col { flex: 1; min-width: 200px; }
-footer .footer-logo img { height: 50px; margin-bottom: 15px; }
-footer .footer-social { display: flex; gap: 10px; margin-top: 5px; }
-footer .footer-social a { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; color: #fff; transition: color 0.3s; }
-footer .footer-social a:hover { color: #fff; }
-footer ul { list-style: none; padding: 0; margin: 10px 0 20px 0; line-height: 1.8; }
-footer ul li a { color: #fff; text-decoration: none; transition: color 0.3s; }
-footer ul li a:hover { color: #fff; }
-footer p, footer strong, footer blockquote, footer span, footer li { color: #fff !important; }
-footer .footer-bottom { margin-top: 30px; border-top: 1px solid rgba(255,255,255,0.3); padding-top: 15px; font-size: 14px; text-align: left; }
-footer .footer-bottom a { color: #fff; text-decoration: none; margin: 0 8px; }
-footer .footer-bottom a:hover { color: #fff; }
-
-@media screen and (max-width: 768px) {
-  footer .footer-container { flex-direction: column; gap: 25px; }
-}
-/* ================= DN Badge ================= */
-/* Badge DN */
-.dn-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 60px;
-    height: 60px;
-    background: #ffcc00;
-    color: #fff;
-    font-weight: 700;
-    border-radius: 50%;
-    font-size: 20px;
-    text-decoration: none;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-    transition: transform 0.3s, box-shadow 0.3s, background 0.3s;
-}
-.dn-badge:hover {
-    background: linear-gradient(135deg, #ffd633, #ffb900);
-    transform: scale(1.4) rotate(-10deg);
-    box-shadow: 0 12px 20px rgba(0,0,0,0.5);
-}
-
-/* Cont container */
-.myaccount {
-    max-width: 1200px;
-    margin: auto;
-    padding: 20px;
-    font-family: 'Roboto', sans-serif;
-}
-
-/* Header cont */
-.account-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    margin-bottom: 30px;
-    gap: 15px;
-}
-.account-info p {
-    margin: 2px 0;
-    font-weight: 500;
-}
-.account-info .fullname { font-weight: 700; font-size: 18px; }
-.account-header .btn-primary {
-    background: #b5651d;
-    color: #fff;
-    padding: 12px 25px;
-    border-radius: 8px;
-    text-decoration: none;
-    font-weight: 500;
-    transition: 0.3s;
-}
-.account-header .btn-primary:hover {
-    background: #8b4315;
-}
-
-/* Carduri */
-.account-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 20px;
-}
-.card {
-    background: #fff;
-    border-radius: 16px;
-    padding: 20px;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-    transition: transform 0.3s, box-shadow 0.3s;
-}
-.card:hover {
-    transform: translateY(-6px);
-    box-shadow: 0 16px 35px rgba(0,0,0,0.2);
-}
-.card h3 { margin-top:0; margin-bottom:10px; }
-.card p { margin:5px 0; }
-
-/* Butoane secundare */
-.btn-secondary {
-    display: inline-block;
-    background: #b5651d;
-    color: #fff;
-    padding: 10px 20px;
-    border-radius: 8px;
-    text-decoration: none;
-    font-weight: 500;
-    margin-top: 5px;
-    transition: 0.3s;
-}
-.btn-secondary:hover {
-    background: #8b4315;
-    transform: scale(1.05);
-}
-
-  .account-footer a {
-      display: inline-block;
-      background: #b5651d;
-      color: #fff;
-      padding: 12px 28px;
-      border-radius: 8px;
-      font-weight: 500;
-      text-decoration: none;
-      transition: 0.3s, transform 0.2s;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-  }
-
-  .account-footer a:hover {
-      background: #8b4315;
-      transform: translateY(-2px) scale(1.05);
-      box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-  }
-/* Hamburger */
-.menu-toggle {
-  display: none;
-  flex-direction: column;
-  cursor: pointer;
-  gap: 5px;
-}
-.menu-toggle div {
-  width: 30px;
-  height: 3px;
-  background: #fff;
-  transition: 0.3s;
-}
-
-/* Nav general */
-header nav {
+footer .footer-col {
   flex: 1;
-  display: flex;
-  justify-content: center;
-  gap: 15px;
-  flex-wrap: wrap;
-  transition: max-height 0.3s ease;
+  min-width: 200px;
 }
 
-@media screen and (max-width:768px){
-  #mainNav { display: none; flex-direction: column; width: 100%; margin-top: 10px; gap: 8px; }
-  #mainNav.mobile-open { display: flex; }
-  .menu-toggle { display: flex; }
+footer .footer-logo img {
+  height: 50px;
+  margin-bottom: 15px;
+}
+
+footer .footer-social {
+  display: flex;
+  gap: 10px;
+  margin-top: 5px;
+}
+
+footer .footer-social a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: #fff;
+}
+
+footer ul {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 20px 0;
+  line-height: 1.8;
+}
+
+footer ul li a {
+  color: #fff;
+  text-decoration: none;
+}
+
+footer p,
+footer strong,
+footer blockquote,
+footer span,
+footer li {
+  color: #fff !important;
+}
+
+footer .footer-bottom {
+  margin-top: 30px;
+  border-top: 1px solid rgba(255,255,255,0.3);
+  padding-top: 15px;
+  font-size: 14px;
+  text-align: left;
+}
+
+footer .footer-bottom a {
+  color: #fff;
+  text-decoration: none;
+  margin: 0 8px;
+}
+
+body.dark-mode {
+  background: #111;
+  color: #eee;
+}
+
+body.dark-mode header {
+  background: #222;
+}
+
+body.dark-mode header nav a {
+  background: #333;
+  color: #eee;
+}
+
+body.dark-mode header nav a:hover,
+body.dark-mode header nav a.active {
+  background: #555;
+  color: #fff;
+}
+
+body.dark-mode .card {
+  background: #1e1e1e;
+  color: #eee;
+}
+
+body.dark-mode .monitor-table {
+  background: #1e1e1e;
+  color: #eee;
+}
+
+body.dark-mode .monitor-table th {
+  background: #333;
+}
+
+body.dark-mode footer {
+  background: #222;
+}
+
+.chart-card {
+  max-width: 760px;
+  margin: 20px auto;
+  padding: 16px;
+}
+
+.chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 220px;
+}
+
+@media (max-width: 768px) {
+  header nav {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    margin-top: 10px;
+    gap: 10px;
+  }
+
+  header nav.mobile-open {
+    display: flex;
+  }
+
+  .menu-toggle {
+    display: flex;
+  }
+
+  .account-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  footer .footer-container {
+    flex-direction: column;
+    gap: 25px;
+  }
+
+  .chart-card {
+    max-width: 100%;
+    margin: 16px 0;
+    padding: 14px;
+  }
+
+  .chart-wrap {
+    height: 180px;
+  }
+
+  .section-title {
+    font-size: 18px;
+    margin: 24px 0 12px;
+  }
+
+  .card p {
+    font-size: 14px;
+    line-height: 1.4;
+  }
+}
+
+@media (max-width: 480px) {
+  .chart-wrap {
+    height: 160px;
+  }
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-<header id="header">
-  <div style="display:flex;align-items:center;justify-content:space-between;width:100%;flex-wrap:wrap;">
-    <div style="display:flex;align-items:center;gap:15px;">
-      <img src="Image41.png" alt="Logo" style="height:50px;">
-    </div>
 
-    <!-- Navigatie -->
+<header id="header">
+  <div>
+    <a href="Acasa.php" style="display:inline-flex;align-items:center;text-decoration:none;">
+      <img src="Image41.png" alt="Logo" style="height:50px;">
+    </a>
+
     <nav id="mainNav" aria-label="Meniu principal">
       <a href="Acasa.php">Acasă</a>
       <a href="Colectie.php">Colecție</a>
@@ -535,39 +783,151 @@ header nav {
       <a href="Contact.php">Contact</a>
       <a href="CosulMeu.php">Cosul Meu</a>
 
-      <?php if(isset($_SESSION['user_id'])):
-        $displayName = htmlspecialchars($_SESSION['user_username'] ?? $_SESSION['user_email']); ?>
-        <div class="dropdown">
-          <a href="ContulMeu.php" class="active"><?= $displayName ?> ▾</a>
-          <div class="dropdown-content">
-            <a href="ContulMeu.php">Profil</a>
-            <a href="#">Setări</a>
-            <a href="ContulMeu.php?logout=1">Deconectare</a>
-          </div>
+      <div class="dropdown">
+        <a href="ContulMeu.php" class="active"><?= h($displayName) ?> ▾</a>
+        <div class="dropdown-content">
+          <a href="ContulMeu.php">Profil</a>
+          <a href="ContulMeu.php?logout=1">Deconectare</a>
         </div>
-      <?php else: ?>
-        <a href="login.php">Contul Meu</a>
-      <?php endif; ?>
+      </div>
     </nav>
 
-    <!-- Hamburger mobil -->
     <div class="menu-toggle" onclick="toggleMenu()" aria-label="Deschide meniul mobil" role="button" tabindex="0">
       <div></div>
       <div></div>
       <div></div>
     </div>
-
   </div>
 </header>
-<div class="container myaccount">
-  <div class="account-footer">
-    <a class="btn-primary" href="Acasa.php">Pagina principală</a>
-    <a class="btn-primary" href="ContulMeu.php?logout=1">Deconectare</a>
+
+<div class="myaccount">
+  <div class="account-header">
+    <div class="account-info">
+      <p class="fullname"><?= h($displayName) ?></p>
+      <p>Utilizator logat</p>
+    </div>
+    <div class="account-footer">
+      <a class="btn-primary" href="Acasa.php">Pagina principală</a>
+      <a class="btn-primary" href="ContulMeu.php?logout=1">Deconectare</a>
+    </div>
   </div>
+
+  <h2 class="section-title">Trafic din social</h2>
+
+  <div class="account-cards">
+    <?php foreach (['youtube', 'instagram', 'facebook', 'tiktok', 'direct'] as $src): ?>
+      <?php $row = $statsBySource[$src] ?? null; ?>
+      <div class="card">
+        <h3><?= h(sourceLabel($src)) ?></h3>
+        <p>Total intrări: <?= (int)($row['total_visits'] ?? 0) ?></p>
+        <p>Intrări unice: <?= (int)($row['unique_visits'] ?? 0) ?></p>
+        <p>Ultima intrare: <?= h((string)($row['last_visit'] ?? '-')) ?></p>
+      </div>
+    <?php endforeach; ?>
+  </div>
+
+  <?php if ($canSeeMonitor): ?>
+    <div class="monitor-section">
+      <div class="card chart-card">
+        <h3>Trafic pe platforme</h3>
+        <div class="chart-wrap">
+          <canvas id="socialTrafficChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <h3>Evoluție pe zile</h3>
+        <table class="monitor-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Intrări total</th>
+              <th>Intrări unice</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php if (!empty($monitorDaily)): ?>
+              <?php foreach ($monitorDaily as $row): ?>
+                <tr>
+                  <td><?= h((string)$row['day']) ?></td>
+                  <td><?= (int)($row['total_visits'] ?? 0) ?></td>
+                  <td><?= (int)($row['unique_visits'] ?? 0) ?></td>
+                </tr>
+              <?php endforeach; ?>
+            <?php else: ?>
+              <tr>
+                <td colspan="3">Nu există date încă.</td>
+              </tr>
+            <?php endif; ?>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <h3>Clickuri pe linkurile sociale</h3>
+        <table class="monitor-table">
+          <thead>
+            <tr>
+              <th>Platformă</th>
+              <th>Nume</th>
+              <th>Total clickuri</th>
+              <th>Clickuri unice</th>
+              <th>Ultimul click</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php if (!empty($clickStatsByLink)): ?>
+              <?php foreach ($clickStatsByLink as $row): ?>
+                <tr>
+                  <td><?= h((string)$row['platform']) ?></td>
+                  <td><?= h((string)$row['name']) ?></td>
+                  <td><?= (int)($row['total_clicks'] ?? 0) ?></td>
+                  <td><?= (int)($row['unique_clicks'] ?? 0) ?></td>
+                  <td><?= h((string)$row['last_click'] ?? '-') ?></td>
+                </tr>
+              <?php endforeach; ?>
+            <?php else: ?>
+              <tr>
+                <td colspan="5">Nu există clickuri înregistrate încă.</td>
+              </tr>
+            <?php endif; ?>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <h3>Evoluție clickuri pe zile</h3>
+        <table class="monitor-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Clickuri total</th>
+              <th>Clickuri unice</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php if (!empty($clickDaily)): ?>
+              <?php foreach ($clickDaily as $row): ?>
+                <tr>
+                  <td><?= h((string)$row['day']) ?></td>
+                  <td><?= (int)($row['total_clicks'] ?? 0) ?></td>
+                  <td><?= (int)($row['unique_clicks'] ?? 0) ?></td>
+                </tr>
+              <?php endforeach; ?>
+            <?php else: ?>
+              <tr>
+                <td colspan="3">Nu există date încă.</td>
+              </tr>
+            <?php endif; ?>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  <?php endif; ?>
 </div>
+
 <footer id="footer">
   <div class="footer-container">
-
     <div class="footer-col">
       <div class="footer-logo">
         <img src="Image41.png" alt="Sherghei Covoare">
@@ -575,19 +935,40 @@ header nav {
       <p>Primul an in care aducem covoare traditionale si moderne in casa ta.</p>
 
       <div class="footer-social">
-        <a href="https://www.facebook.com/maestro.fortunato/" target="_blank" title="Facebook">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 2h-3a4 4 0 0 0-4 4v3H8v4h3v8h4v-8h3l1-4h-4V6a1 1 0 0 1 1-1h3z"/>
-          </svg>
-        </a>
+        <?php if (isset($trackedLinks['facebook'])): ?>
+          <a href="<?= h(buildTrackUrl((int)$trackedLinks['facebook']['id'])) ?>" target="_blank" rel="noopener" title="Facebook">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 2h-3a4 4 0 0 0-4 4v3H8v4h3v8h4v-8h3l1-4h-4V6a1 1 0 0 1 1-1h3z"/>
+            </svg>
+          </a>
+        <?php endif; ?>
 
-        <a href="https://www.instagram.com/hariharago?igsh=MXd5dHd5ZzY2ZnBpaw==" target="_blank" title="Instagram">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
-            <path d="M16 11.37a4 4 0 1 1-7.94 1.26 4 4 0 0 1 7.94-1.26z"/>
-            <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
-          </svg>
-        </a>
+        <?php if (isset($trackedLinks['instagram'])): ?>
+          <a href="<?= h(buildTrackUrl((int)$trackedLinks['instagram']['id'])) ?>" target="_blank" rel="noopener" title="Instagram">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+              <path d="M16 11.37a4 4 0 1 1-7.94 1.26 4 4 0 0 1 7.94-1.26z"/>
+              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
+            </svg>
+          </a>
+        <?php endif; ?>
+
+        <?php if (isset($trackedLinks['youtube'])): ?>
+          <a href="<?= h(buildTrackUrl((int)$trackedLinks['youtube']['id'])) ?>" target="_blank" rel="noopener" title="YouTube">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.97C18.88 4 12 4 12 4s-6.88 0-8.59.45A2.78 2.78 0 0 0 1.46 6.42 29.5 29.5 0 0 0 1 12a29.5 29.5 0 0 0 .46 5.58 2.78 2.78 0 0 0 1.95 1.97C5.12 20 12 20 12 20s6.88 0 8.59-.45a2.78 2.78 0 0 0 1.95-1.97A29.5 29.5 0 0 0 23 12a29.5 29.5 0 0 0-.46-5.58z"/>
+              <polygon points="10,15 15,12 10,9"/>
+            </svg>
+          </a>
+        <?php endif; ?>
+
+        <?php if (isset($trackedLinks['tiktok'])): ?>
+          <a href="<?= h(buildTrackUrl((int)$trackedLinks['tiktok']['id'])) ?>" target="_blank" rel="noopener" title="TikTok">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 8.5a4.5 4.5 0 0 1-4.5-4.5H9v11.5a3.5 3.5 0 1 1-3-3.46V9.9a6.5 6.5 0 1 0 7 6.4V8.5h3z"/>
+            </svg>
+          </a>
+        <?php endif; ?>
       </div>
     </div>
 
@@ -599,7 +980,7 @@ header nav {
         <li><a href="DespreNoi.php">Despre Noi</a></li>
         <li><a href="Contact.php">Contact</a></li>
         <li><a href="CosulMeu.php">Cosul Meu</a></li>
-		 <li><a href="ContulMeu.php">Contul Meu</a></li>
+        <li><a href="ContulMeu.php">Contul Meu</a></li>
       </ul>
     </div>
 
@@ -615,22 +996,21 @@ header nav {
     <div class="footer-col">
       <strong>Contact</strong>
       <p>Adresa, Craiova,Dolj</p>
-      <p>Telefon, 0764.049.235</p>
+      <p>Telefon, 0753 508 461</p>
       <p>Email, office@magazinpsy.ro</p>
       <p>Program, Luni Sambata 9 18</p>
     </div>
-
   </div>
 
   <div class="footer-bottom">
     <p>© 2024 Sherghei Covoare. Toate drepturile rezervate.</p>
-    <a href="#">Termeni si conditii</a> |
-    <a href="#">Politica de confidentialitate</a>
+    <a href="TermeniSiConditii.php">Termeni si conditii</a> |
+    <a href="PoliticaDeConfidentialitate.php">Politica de confidentialitate</a>
   </div>
 </footer>
+
 <script>
 (function(){
-  // init dark mode dacă vrei să păstrezi funcționalitatea existentă
   if (localStorage.getItem('darkMode') === '1') {
     document.body.classList.add('dark-mode');
     const footer = document.getElementById('footer');
@@ -642,9 +1022,8 @@ header nav {
   function norm(href){
     if(!href) return '';
     href = href.split('?')[0].split('#')[0].trim();
-    // elimină orice cale, rămâne doar numele fișierului
     const parts = href.split('/');
-    const file = parts[parts.length-1] || '';
+    const file = parts[parts.length - 1] || '';
     return decodeURIComponent(file).toLowerCase();
   }
 
@@ -654,26 +1033,21 @@ header nav {
     const isMobile = window.innerWidth <= 768;
     const open = nav.classList.contains('mobile-open');
 
-    // parcurgem doar copiii imediati, ca in markup
     Array.from(nav.children).forEach(child => {
-      // link direct
       if(child.tagName === 'A'){
         const href = child.getAttribute('href') || '';
         const name = norm(href);
         if(!isMobile){
           child.style.display = '';
         } else {
-          // mobil: dacă meniul închis ascundem tot
-          if(!open) child.style.display = 'none';
-          else child.style.display = ALLOWED.has(name) ? 'block' : 'none';
+          child.style.display = open && ALLOWED.has(name) ? 'block' : 'none';
         }
         return;
       }
 
-      // dropdown
       if(child.classList && child.classList.contains('dropdown')){
         const parentA = child.querySelector(':scope > a');
-        const parentHref = parentA ? (parentA.getAttribute('href')||'') : '';
+        const parentHref = parentA ? (parentA.getAttribute('href') || '') : '';
         const parentName = norm(parentHref);
 
         if(!isMobile){
@@ -688,7 +1062,6 @@ header nav {
             const dc = child.querySelector('.dropdown-content');
             if(dc) dc.style.display = 'none';
           } else {
-            // afișează părinte doar dacă permis, dar ascunde conținutul dropdown
             if(ALLOWED.has(parentName)){
               child.style.display = '';
               if(parentA) parentA.style.display = 'block';
@@ -702,14 +1075,9 @@ header nav {
         }
         return;
       }
-
-      // alte elemente
-      if(!isMobile) child.style.display = '';
-      else child.style.display = nav.classList.contains('mobile-open') ? '' : 'none';
     });
   }
 
-  // toggle meniu mobil, apelată din onclick HTML
   window.toggleMenu = function(){
     const nav = document.getElementById('mainNav');
     if(!nav) return;
@@ -717,7 +1085,6 @@ header nav {
     updateNavVisibility();
   };
 
-  // închidere la click în afara meniului pe mobil
   document.addEventListener('click', (e) => {
     const nav = document.getElementById('mainNav');
     const toggle = document.querySelector('.menu-toggle');
@@ -729,22 +1096,85 @@ header nav {
     }
   });
 
-  // resize / orientation
   let rt;
   window.addEventListener('resize', () => {
     clearTimeout(rt);
     rt = setTimeout(updateNavVisibility, 70);
   });
+
   window.addEventListener('orientationchange', () => setTimeout(updateNavVisibility, 120));
 
-  // run la load
   document.addEventListener('DOMContentLoaded', () => {
-    // forțează ascunderea linkurilor pe mobil până se deschide meniul
     updateNavVisibility();
   });
-
 })();
+
+document.addEventListener('DOMContentLoaded', function () {
+  const ctx = document.getElementById('socialTrafficChart');
+  if (ctx && typeof Chart !== 'undefined') {
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: <?= json_encode($trafficLabels, JSON_UNESCAPED_UNICODE) ?>,
+        datasets: [
+          {
+            label: 'Intrări totale',
+            data: <?= json_encode($trafficTotals, JSON_UNESCAPED_UNICODE) ?>,
+            borderWidth: 1
+          },
+          {
+            label: 'Intrări unice',
+            data: <?= json_encode($trafficUnique, JSON_UNESCAPED_UNICODE) ?>,
+            borderWidth: 1
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: {
+          padding: {
+            top: 8,
+            right: 8,
+            bottom: 0,
+            left: 0
+          }
+        },
+        plugins: {
+          legend: {
+            position: 'top',
+            labels: {
+              boxWidth: 12,
+              boxHeight: 12,
+              font: {
+                size: 11
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: {
+              font: {
+                size: 11
+              }
+            }
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              precision: 0,
+              font: {
+                size: 11
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+});
 </script>
-</div>
+
 </body>
 </html>

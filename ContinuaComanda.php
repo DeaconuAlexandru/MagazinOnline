@@ -19,7 +19,6 @@ try {
 } catch (PDOException $e) {
     die("Conexiune esuata");
 }
-
 /* =========================
    VERIFICARE COS
 ========================= */

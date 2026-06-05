@@ -50,7 +50,6 @@ try {
     http_response_code(500);
     exit('Eroare internă.');
 }
-
 // helper-uri
 function csrf_token(): string {
     if (empty($_SESSION['csrf_token'])) $_SESSION['csrf_token'] = bin2hex(random_bytes(16));
@@ -69,6 +68,53 @@ function safe_redirect(string $uri): void {
     exit;
 }
 
+function normalize_internal_redirect(?string $target, string $default = 'Acasa.php'): string {
+    $target = trim((string)$target);
+    if ($target === '') {
+        return $default;
+    }
+
+    $target = str_replace(["\0", "\r", "\n"], '', $target);
+    $parts = parse_url($target);
+    if ($parts === false) {
+        return $default;
+    }
+
+    if (!empty($parts['scheme']) || !empty($parts['host']) || str_starts_with($target, '//')) {
+        return $default;
+    }
+
+    $path = ltrim($parts['path'] ?? '', '/');
+    $allowed = ['Acasa.php', 'Admin.php'];
+    if (!in_array($path, $allowed, true)) {
+        return $default;
+    }
+
+    return $path;
+}
+
+function resolve_post_login_redirect_target(): string {
+    if (!empty($_SESSION['post_login_redirect'])) {
+        return normalize_internal_redirect((string)$_SESSION['post_login_redirect']);
+    }
+
+    if (!empty($_GET['redirect'])) {
+        return normalize_internal_redirect((string)$_GET['redirect']);
+    }
+
+    if (!empty($_POST['redirect'])) {
+        return normalize_internal_redirect((string)$_POST['redirect']);
+    }
+
+    return 'Acasa.php';
+}
+
+function consume_post_login_redirect_target(): string {
+    $target = resolve_post_login_redirect_target();
+    unset($_SESSION['post_login_redirect']);
+    return $target;
+}
+
 // RATE LIMIT simplu pe sesiune
 if (!isset($_SESSION['auth_fail'])) $_SESSION['auth_fail'] = ['count' => 0, 'last' => 0];
 $fail = &$_SESSION['auth_fail'];
@@ -79,6 +125,11 @@ if ($fail['count'] >= $maxFails && ($now - $fail['last']) < $lockWindow) {
     $remaining = $lockWindow - ($now - $fail['last']);
     http_response_code(429);
     exit("Prea multe încercări. Încearcă peste {$remaining} secunde.");
+}
+
+$loginRedirectTarget = resolve_post_login_redirect_target();
+if (empty($_GET['action']) && !empty($_SESSION['user_id']) && $loginRedirectTarget !== 'Acasa.php') {
+    safe_redirect($loginRedirectTarget);
 }
 
 // ===== Google OAuth flow (GET actions) =====
@@ -183,8 +234,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'google_callback') {
     $_SESSION['user_id'] = $userId;
     $_SESSION['user_email'] = $email;
     $_SESSION['user_username'] = $username;
-
-    safe_redirect('Acasa.php');
+    safe_redirect(consume_post_login_redirect_target());
 }
 // ==== Facebook OAuth (GET actions) ====
 if (isset($_GET['action']) && $_GET['action'] === 'facebook') {
@@ -289,14 +339,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'facebook_callback') {
     $_SESSION['user_id'] = $userId;
     $_SESSION['user_email'] = $email;
     $_SESSION['user_username'] = $username;
-
-    safe_redirect('Acasa.php');
+    safe_redirect(consume_post_login_redirect_target());
 }
 // ===== LOGOUT via GET? =====
 if (isset($_GET['logout'])) {
     session_unset();
     session_destroy();
-    safe_redirect('Acasa.php');
+    safe_redirect(consume_post_login_redirect_target());
 }
 
 // Mesaje pentru view
@@ -350,14 +399,11 @@ if (isset($_POST['login'])) {
         $stmt = $pdo->prepare("SELECT id, username, password FROM users WHERE email = ? LIMIT 1");
         $stmt->execute([$email]);
         $user = $stmt->fetch();
-
-        if ($user && password_verify($password, $user['password'])) {
-            $_SESSION['user_id'] = $user['id'];
-            $_SESSION['user_email'] = $email;
-            $_SESSION['user_username'] = $user['username'];
-
-            header("Location: Acasa.php");
-            exit;
+if ($user && password_verify($password, $user['password'])) {
+    $_SESSION['user_id'] = $user['id'];
+    $_SESSION['user_email'] = $email;
+    $_SESSION['user_username'] = $user['username'];
+            safe_redirect(consume_post_login_redirect_target());
         } else {
             $loginFeedback = 'Email sau parola incorecta.';
         }
@@ -412,15 +458,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['social_login'])) {
                     $_SESSION['user_id'] = $user_id;
                     $_SESSION['user_email'] = $email;
                     $_SESSION['user_username'] = $username;
-                    safe_redirect('Acasa.php');
+                    safe_redirect(consume_post_login_redirect_target());
                 }
             }
         }
     }
 }
+// RESET PAROLA
+if (isset($_POST['reset_password'])) {
+    $csrf = $_POST['csrf'] ?? null;
+    if (!check_csrf($csrf)) {
+        $resetFeedback = 'Cerere invalidă.';
+    } else {
+        $email = strtolower(trim($_POST['reset_email'] ?? ''));
+        $newPassword = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
 
+        if ($email === '' || $newPassword === '' || $confirmPassword === '') {
+            $resetFeedback = 'Completează toate câmpurile.';
+        } elseif (!preg_match('/^[a-z0-9._%+\-]+@gmail\.com$/i', $email)) {
+            $resetFeedback = 'Trebuie introdus un cont Gmail.';
+        } elseif ($newPassword !== $confirmPassword) {
+            $resetFeedback = 'Parolele nu coincid.';
+        } else {
+            $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch();
+
+            if (!$user) {
+                $resetFeedback = 'Nu există cont cu acest email.';
+            } else {
+                $hash = password_hash($newPassword, PASSWORD_DEFAULT);
+                $upd = $pdo->prepare("UPDATE users SET password = ? WHERE email = ?");
+                $upd->execute([$hash, $email]);
+
+                $resetFeedback = 'Parola a fost schimbată cu succes. Te poți autentifica acum.';
+            }
+        }
+    }
+}
 // CSRF pentru view
 $csrfForView = csrf_token();
+$loginRedirectTarget = resolve_post_login_redirect_target();
 
 // AJAX support
 if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
@@ -753,7 +832,7 @@ background-position:center;
   <div class="header-inner" style="display:flex;align-items:center;justify-content:space-between;width:100%;flex-wrap:wrap;">
     <div class="brand" style="display:flex;align-items:center;gap:15px;">
       <a href="Acasa.php" aria-label="Mergi la pagina principala">
-        <img src="Image3.png" alt="Sherghei Covoare" style="height:50px;display:block;">
+        <img src="Image41.png" alt="Sherghei Covoare" style="height:50px;display:block;">
       </a>
     </div>
 
@@ -761,7 +840,7 @@ background-position:center;
       <a href="Acasa.php" class="nav-link">Acasă</a>
       <a href="Colectie.php" class="nav-link">Colecție</a>
       <a href="DespreNoi.php" class="nav-link">Despre Noi</a>
-      <a href="Contact.php?topic=recuperare-parola" style="padding:12px 16px;background:#f3f3f3;color:#111;border-radius:10px;text-decoration:none;">Recuperează parola</a>
+        <a href="Contact.php" class="nav-link">Contact</a>
       <a href="CosulMeu.php" class="nav-link">Coșul Meu</a>
 
       <?php if (!empty($_SESSION['user_id'])): ?>
@@ -808,6 +887,7 @@ background-position:center;
 
     <form method="post" autocomplete="off" novalidate style="max-width:460px;display:flex;flex-direction:column;gap:12px;">
       <input type="hidden" name="csrf" value="<?php echo htmlspecialchars($csrfForView ?? ($_SESSION['csrf_token'] ?? '')); ?>">
+      <input type="hidden" name="redirect" value="<?php echo htmlspecialchars($loginRedirectTarget); ?>">
       <label for="reg-email" class="sr-only">Email</label>
       <input id="reg-email" class="input" type="email" name="email" required placeholder="Adresa de email" value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" style="padding:12px;border:1px solid #ddd;border-radius:10px;">
       <label for="reg-username" class="sr-only">Username</label>
@@ -830,13 +910,14 @@ background-position:center;
 
     <form method="post" autocomplete="off" novalidate style="max-width:460px;display:flex;flex-direction:column;gap:12px;">
       <input type="hidden" name="csrf" value="<?php echo htmlspecialchars($csrfForView ?? ($_SESSION['csrf_token'] ?? '')); ?>">
+      <input type="hidden" name="redirect" value="<?php echo htmlspecialchars($loginRedirectTarget); ?>">
       <label for="login-email" class="sr-only">Email</label>
       <input id="login-email" class="input" type="email" name="email" required placeholder="Email" value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" style="padding:12px;border:1px solid #ddd;border-radius:10px;">
       <label for="login-password" class="sr-only">Parolă</label>
       <input id="login-password" class="input" type="password" name="password" required placeholder="Parolă" style="padding:12px;border:1px solid #ddd;border-radius:10px;">
       <div style="display:flex;gap:10px;align-items:center;">
         <button type="submit" name="login" style="padding:12px 16px;background:linear-gradient(135deg,#b5651d,#8b4315);color:#fff;border:0;border-radius:10px;font-weight:600;cursor:pointer;">Login</button>
-        <a href="Contact.php?topic=recuperare-parola" style="padding:12px 16px;background:#f3f3f3;color:#111;border-radius:10px;text-decoration:none;">Recuperează parola</a>
+        <button type="button" id="toggleResetPassword" aria-controls="reset-password" aria-expanded="<?php echo !empty($resetFeedback) ? 'true' : 'false'; ?>" style="padding:12px 16px;background:#f3f3f3;color:#111;border:0;border-radius:10px;text-decoration:none;cursor:pointer;">Ai uitat parola?</button>
       </div>
     </form>
 
@@ -849,9 +930,7 @@ background-position:center;
     <h2 id="social-title" style="color:#b5651d;margin:6px 0 14px;font-family:Montserrat, sans-serif;">Autentificare rapidă</h2>
 
     <div class="social-login" style="display:flex;gap:12px;flex-wrap:wrap;">
-      <a href="Login.php?action=google" class="social-btn google" style="padding:12px 16px;border-radius:10px;background:#4C2882;color:#fff;text-decoration:none;font-weight:700;">Conectează cu Google</a>
-      <a href="#" class="social-btn facebook" style="padding:12px 16px;border-radius:10px;background:#1877f2;color:#fff;text-decoration:none;font-weight:700;">Conectează cu Facebook</a>
-      <a href="#" class="social-btn apple" style="padding:12px 16px;border-radius:10px;background:#000;color:#fff;text-decoration:none;font-weight:700;">Conectează cu Apple</a>
+      <a href="Login.php?action=google<?php echo $loginRedirectTarget !== 'Acasa.php' ? '&amp;redirect=' . urlencode($loginRedirectTarget) : ''; ?>" class="social-btn google" style="padding:12px 16px;border-radius:10px;background:#4C2882;color:#fff;text-decoration:none;font-weight:700;">Conectează cu Google</a>
     </div>
 
     <?php if (!empty($socialFeedback)): ?>
@@ -873,7 +952,30 @@ background-position:center;
 <?php endif; ?>
 
 </main>
+<section class="card reset" id="reset-password" aria-labelledby="reset-title" style="display:<?php echo !empty($resetFeedback) ? 'block' : 'none'; ?>;background:#fff;border-radius:12px;padding:20px;margin-bottom:18px;box-shadow:0 8px 24px rgba(0,0,0,0.06);">
+  <h2 id="reset-title" style="color:#b5651d;margin:6px 0 14px;font-family:Montserrat, sans-serif;">Ai uitat parola?</h2>
 
+  <form method="post" autocomplete="off" novalidate style="max-width:460px;display:flex;flex-direction:column;gap:12px;">
+    <input type="hidden" name="csrf" value="<?php echo htmlspecialchars($csrfForView ?? ($_SESSION['csrf_token'] ?? '')); ?>">
+
+    <label for="reset-email" class="sr-only">Email Gmail</label>
+    <input id="reset-email" type="email" name="reset_email" required placeholder="Adresa Gmail" style="padding:12px;border:1px solid #ddd;border-radius:10px;">
+
+    <label for="new-password" class="sr-only">Parolă nouă</label>
+    <input id="new-password" type="password" name="new_password" required placeholder="Parolă nouă" style="padding:12px;border:1px solid #ddd;border-radius:10px;">
+
+    <label for="confirm-password" class="sr-only">Confirmă parola</label>
+    <input id="confirm-password" type="password" name="confirm_password" required placeholder="Confirmă parola" style="padding:12px;border:1px solid #ddd;border-radius:10px;">
+
+    <button type="submit" name="reset_password" style="padding:12px 16px;background:linear-gradient(135deg,#b5651d,#8b4315);color:#fff;border:0;border-radius:10px;font-weight:600;cursor:pointer;">
+      Resetează parola
+    </button>
+  </form>
+
+  <?php if (!empty($resetFeedback)): ?>
+    <p class="feedback" role="alert" style="color:#c0392b;margin-top:12px;"><?php echo htmlspecialchars($resetFeedback); ?></p>
+  <?php endif; ?>
+</section>
 <footer id="footer">
   <div class="footer-container">
 
@@ -923,7 +1025,7 @@ background-position:center;
     <div class="footer-col">
       <strong>Contact</strong>
       <p>Adresa, Craiova,Dolj</p>
-      <p>Telefon, 0764.049.235</p>
+      <p>Telefon, 0753 508 461</p>
       <p>Email, office@magazinpsy.ro</p>
       <p>Program, Luni Sambata 9 18</p>
     </div>
@@ -932,22 +1034,36 @@ background-position:center;
 
   <div class="footer-bottom">
     <p>© 2024 Sherghei Covoare. Toate drepturile rezervate.</p>
-    <a href="#">Termeni si conditii</a> |
-    <a href="#">Politica de confidentialitate</a>
+    <a href="TermeniSiConditii.php">Termeni si conditii</a> |
+    <a href="PoliticaDeConfidentialitate.php">Politica de confidentialitate</a>
   </div>
 </footer>
 <script>
 document.addEventListener('DOMContentLoaded', function(){
   const loginRec = document.querySelector('a[href="Contact.php?topic=recuperare-parola"]');
   const emailInput = document.getElementById('login-email');
-  if (!loginRec) return;
+  const resetSection = document.getElementById('reset-password');
+  const toggleReset = document.getElementById('toggleResetPassword');
 
-  loginRec.addEventListener('click', function(e){
-    e.preventDefault();
-    const email = (emailInput && emailInput.value) ? encodeURIComponent(emailInput.value.trim()) : '';
-    const url = 'Contact.php?topic=recuperare-parola' + (email ? '&email=' + email : '');
-    window.location.href = url;
-  });
+  if (toggleReset && resetSection) {
+    toggleReset.addEventListener('click', function(){
+      const isHidden = getComputedStyle(resetSection).display === 'none';
+      resetSection.style.display = isHidden ? 'block' : 'none';
+      toggleReset.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+      if (isHidden) {
+        resetSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  }
+
+  if (loginRec) {
+    loginRec.addEventListener('click', function(e){
+      e.preventDefault();
+      const email = (emailInput && emailInput.value) ? encodeURIComponent(emailInput.value.trim()) : '';
+      const url = 'Contact.php?topic=recuperare-parola' + (email ? '&email=' + email : '');
+      window.location.href = url;
+    });
+  }
 });
 </script>
 </body>
