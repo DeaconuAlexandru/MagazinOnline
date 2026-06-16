@@ -17,10 +17,6 @@ session_start();
 // require __DIR__ . '/vendor/autoload.php';
 // if (class_exists(\Dotenv\Dotenv::class)) { \Dotenv\Dotenv::createImmutable(__DIR__)->safeLoad(); }
 
-// CONFIG DIN VARIABILE DE MEDIU
-$GOOGLE_CLIENT_ID     = getenv('GOOGLE_CLIENT_ID') ?: '1054381847952-l0fasrivsvgk7a69n9g4qj8u7a34bfms.apps.googleusercontent.com';
-$GOOGLE_CLIENT_SECRET = getenv('GOOGLE_CLIENT_SECRET') ?: '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';
-$GOOGLE_REDIRECT_URI = getenv('GOOGLE_REDIRECT_URI') ?: 'https://magazinpsy.ro/Login.php?action=google_callback';
 
 // FACEBOOK CONFIG (folosește getenv() în producție)
 $FACEBOOK_APP_ID     = getenv('FACEBOOK_APP_ID')     ?: 'a583f7397577c9664e4ac0c8675ccd18';
