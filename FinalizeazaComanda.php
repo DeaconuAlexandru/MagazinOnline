@@ -13,22 +13,7 @@ set_error_handler(function($errno, $errstr, $errfile, $errline) {
 
 require 'vendor/autoload.php';
 
-// --- SETARI SMTP ---
-$smtpHost  = 'mail.magazinpsy.ro';
-$smtpUser  = 'office@magazinpsy.ro';
-$smtpPass  = 'pd3AOZRX4L7Af^Ii';
-$smtpPort  = 465;
 
-$fromEmail = 'office@magazinpsy.ro';
-$fromName  = 'Magazin Psy';
-$STORE_EMAIL = 'office@magazinpsy.ro';
-
-// ------------------- DB CONNECTION -------------------
-$host = 'localhost';
-$db   = 'magazi15_ShergeiCovoare';
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
 
 $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
 $options = [
