@@ -26,13 +26,6 @@ if ($name === '' || $email === '' || $message === '' || !filter_var($email, FILT
     redirect_with(false, 'Completeaza corect numele, emailul si mesajul.', $redirect);
 }
 
-/* ========== CONFIG DB (daca vrei salvare) ========== */
-$host = 'localhost';
-$db   = 'magazi15_ShergheiCovoare'; // adapteaza daca e nevoie
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
-
 $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
 $pdoOptions = [
     PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
