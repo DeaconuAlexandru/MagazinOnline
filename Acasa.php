@@ -124,11 +124,6 @@ $txt = [
     ]
 ];
 
-$dbHost = 'localhost';
-$dbName = 'magazi15_ShergeiCovoare';
-$dbUser = 'magazi15_Alex';
-$dbPass = 'lFG;;pevW4DJ?zKD';
-
 try {
     $pdo = new PDO(
         "mysql:host={$dbHost};dbname={$dbName};charset=utf8mb4",
