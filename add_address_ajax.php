@@ -12,13 +12,6 @@ function json_and_exit($arr) {
     exit;
 }
 
-// Conexiune DB
-$host = 'localhost';
-$db   = 'magazi15_ShergeiCovoare';
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
-
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db;charset=$charset", $user, $pass, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
