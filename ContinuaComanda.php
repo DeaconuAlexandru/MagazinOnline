@@ -1,12 +1,7 @@
 <?php
 session_start();
 
-// Conexiune DB
-$host = 'localhost';
-$db   = 'magazi15_ShergeiCovoare';
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
+
 
 $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
 $options = [
