@@ -1,10 +1,4 @@
 <?php
-// Conexiune DB
-$host = 'localhost';
-$db   = 'magazi15_ShergeiCovoare';
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
 
 
 try {
