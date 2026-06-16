@@ -12,11 +12,6 @@ $isStockEditor = in_array($currentEmail, $allowedEmails, true);
 ini_set('display_errors', '1');
 error_reporting(E_ALL);
 
-$host = 'localhost';
-$dbname = 'magazi15_ShergeiCovoare';
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
 
 try {
     $pdo = new PDO(
