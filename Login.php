@@ -22,12 +22,6 @@ session_start();
 $FACEBOOK_APP_ID     = getenv('FACEBOOK_APP_ID')     ?: 'a583f7397577c9664e4ac0c8675ccd18';
 $FACEBOOK_APP_SECRET = getenv('FACEBOOK_APP_SECRET') ?: '858d476b823ef1e1b24707fa835e1a3e';
 $FACEBOOK_REDIRECT_URI = getenv('FACEBOOK_REDIRECT_URI') ?: 'https://magazinpsy.ro/Acasa.php?action=facebook_callback';
-// DB config
-$dbHost = getenv('DB_HOST') ?: 'localhost';
-$dbName = getenv('DB_NAME') ?: 'magazi15_ShergeiCovoare';
-$dbUser = getenv('DB_USER') ?: 'magazi15_Alex';
-$dbPass = getenv('DB_PASS') ?: 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
 
 // DEBUG only in dev
 ini_set('display_errors', '1');
