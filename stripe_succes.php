@@ -6,15 +6,7 @@ error_reporting(E_ALL);
 session_start();
 require 'vendor/autoload.php';
 
-// SMTP
-$smtpHost  = 'mail.magazinpsy.ro';
-$smtpUser  = 'office@magazinpsy.ro';
-$smtpPass  = 'pd3AOZRX4L7Af^Ii';
-$smtpPort  = 465;
 
-$fromEmail = 'office@magazinpsy.ro';
-$fromName  = 'Magazin Psy';
-$STORE_EMAIL = 'office@magazinpsy.ro';
 
 function mailFallback($to, $subject, $htmlBody, $bcc = []) {
     global $fromEmail, $fromName;
@@ -67,12 +59,7 @@ function sendMailViaPHPMailer($to, $subject, $htmlBody, $bcc = []) {
     }
 }
 
-// DB
-$host = 'localhost';
-$db   = 'magazi15_ShergeiCovoare';
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
+
 
 $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
 $options = [
@@ -211,7 +198,7 @@ if ($session_id === '') {
     exit;
 }
 
-\Stripe\Stripe::setApiKey('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');
+\Stripe\Stripe::setApiKey('your_key');
 
 try {
     $session = \Stripe\Checkout\Session::retrieve($session_id, ['expand' => ['payment_intent']]);
