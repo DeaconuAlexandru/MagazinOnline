@@ -36,11 +36,6 @@ if (!admin_email_allowed($currentAdminEmail, $ADMIN_ALLOWED_EMAILS)) {
     exit;
 }
 
-$host    = 'localhost';
-$dbname  = 'magazi15_ShergeiCovoare';
-$user    = 'magazi15_Alex';
-$pass    = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
 
 try {
     $pdo = new PDO("mysql:host={$host};dbname={$dbname};charset={$charset}", $user, $pass, [
