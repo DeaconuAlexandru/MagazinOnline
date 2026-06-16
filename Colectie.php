@@ -139,11 +139,6 @@ if (isset($_GET['lang']) && in_array($_GET['lang'], ['en', 'ro', 'ru'], true)) {
     $lang = $_GET['lang'];
 }
 
-$host = 'localhost';
-$db = 'magazi15_ShergeiCovoare';
-$user = 'magazi15_Alex';
-$pass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
 
 try {
     $pdo = new PDO(
