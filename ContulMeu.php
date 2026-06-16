@@ -3,12 +3,6 @@ declare(strict_types=1);
 
 session_start();
 
-/* ================= CONEXIUNE BD ================= */
-$dbHost = 'localhost';
-$dbName = 'magazi15_ShergeiCovoare';
-$dbUser = 'magazi15_Alex';
-$dbPass = 'lFG;;pevW4DJ?zKD';
-$charset = 'utf8mb4';
 
 try {
     $pdo = new PDO(
